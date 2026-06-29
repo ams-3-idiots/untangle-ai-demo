@@ -1,0 +1,11 @@
+[project]
+name = "untangle-ai"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "streamlit>=1.30",
+    "openai>=1.0",
+    "anthropic>=0.30",
+]
