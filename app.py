@@ -44,7 +44,10 @@ if user_text:
 
     # 의도에 맞는 기능으로 라우팅 → AI 제안 생성 (확정 전 미반영, GP-1)
     proposal = route(intent, user_text)
-    confirm.stage(proposal)
+    if proposal.drafts:
+        confirm.stage(proposal)   # 확정할 후보가 있을 때만 확정 UI를 띄운다
+    else:
+        confirm.clear_pending()   # 빈 결과(F2-4)는 확정 UI 없이 안내 메시지만 남긴다
     active.messages.append(
         Message("assistant", proposal.note or "제안을 준비했어요. 아래에서 확인해주세요.")
     )
@@ -59,11 +62,12 @@ if pending is not None:
     if pending.note:
         st.info(pending.note)
 
-    selected = [
-        draft.id
-        for draft in pending.drafts
-        if st.checkbox(draft.title, value=True, key=f"draft_{draft.id}")
-    ]
+    selected = []
+    for draft in pending.drafts:
+        if st.checkbox(draft.title, value=True, key=f"draft_{draft.id}"):
+            selected.append(draft.id)
+        if draft.memo:
+            st.caption(draft.memo)
 
     col1, col2 = st.columns(2)
     if col1.button("선택 항목 확정", type="primary"):
