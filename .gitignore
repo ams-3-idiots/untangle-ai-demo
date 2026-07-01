@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# 비밀키·환경 변수 (절대 커밋 금지 — WORKFLOW.md W-5, ENVIRONMENT.md §6)
+.streamlit/secrets.toml
+.env
+
+# Agent
+.claude/
