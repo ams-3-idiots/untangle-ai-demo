@@ -22,6 +22,7 @@ class Proposal:
     drafts: list[Todo] = field(default_factory=list)  # 사용자가 확정할 할 일 후보
     note: str = ""                                    # 제안 설명/이유 (F5-3 등)
     source: str = ""                                  # 출처 기능(brain_dump 등)
+    first_step_id: Optional[str] = None               # '지금 할 첫 단계' draft id (F3-5)
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
