@@ -155,6 +155,8 @@ def route(intent: Intent, user_text: str) -> Proposal:
     if intent is Intent.BRAIN_DUMP:
         return brain_dump.extract(user_text)
     if intent is Intent.BREAKDOWN:
+        # 쪼개기는 구체화(질문)→분해로 이어지는 여러 턴 흐름이라 app.py 가 breakdown.start/
+        # decompose 를 직접 몰아준다(F3). route()는 구체화를 건너뛴 단발 분해 진입점만 제공한다.
         return breakdown.decompose(user_text)
     if intent is Intent.SINGLE_ADD:
         return single_add.parse(user_text)
