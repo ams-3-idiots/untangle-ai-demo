@@ -14,13 +14,29 @@ import streamlit as st
 from features import TODOS
 
 
+# 우선순위 라벨 ↔ 값 (FEATURES.md 'TODO Card': 높음·중간·낮음·없음). F4 추출·목록 표시가 공유한다.
+PRIORITY_LABELS = {1: "높음", 2: "중간", 3: "낮음", 4: "없음"}
+PRIORITY_VALUES = {label: value for value, label in PRIORITY_LABELS.items()}
+NO_PRIORITY = 4  # '없음' — 우선순위를 지정하지 않은 기본값
+
+
+def priority_label(value: int) -> str:
+    """우선순위 값(int)을 한국어 라벨로 바꾼다. 알 수 없으면 '없음'."""
+    return PRIORITY_LABELS.get(value, "없음")
+
+
+def priority_value(label: str) -> int:
+    """한국어 우선순위 라벨을 값(int)으로 바꾼다. 알 수 없으면 NO_PRIORITY('없음')."""
+    return PRIORITY_VALUES.get((label or "").strip(), NO_PRIORITY)
+
+
 @dataclass
 class Todo:
     """할 일 한 건. (F7-4: 우선순위·날짜·시간·알림·반복·하위·메모)"""
 
     title: str
     memo: str = ""
-    priority: int = 3                       # 1(높음) ~ 4(낮음)
+    priority: int = NO_PRIORITY             # 1(높음)·2(중간)·3(낮음)·4(없음)
     due_date: Optional[date] = None
     due_time: Optional[time] = None
     reminder: Optional[str] = None
