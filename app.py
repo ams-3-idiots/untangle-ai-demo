@@ -27,8 +27,9 @@ F3 인수 기준(쪼개기):
 
 F4 인수 기준(한 줄 추가):
 - F4-1 한 문장으로 단일 할 일 추가 → st.chat_input (F1-1 과 같은 통로)
-- F4-2 속성(날짜·시간·우선순위·반복) 추출 → coplanner.route → single_add.parse (call_llm)
-- F4-3 모호·부족 시 최소 확인      → 단서 없는 속성은 비운 채, 확정 패널에서만 검토·수정(되묻기 없음)
+- F4-2 속성(날짜·시간·우선순위·반복) 추출 → single_add.start (call_llm)
+- F4-3 모호·부족 시 최소 확인      → 제목이 모호할 때만 이지선다로 한두 개 되묻고(과도한 질문 금지),
+                                    나머지 선택 속성은 비운 채 확정 패널에서 검토·수정
 - F4-4 확정 후 반영              → 확정 패널의 '담기' → single_add.commit_edited (GP-1)
 - F4-5 한 문장 = 한 할 일         → single_add 가 정확히 한 건만 만든다(다수 후보 아님)
 """
@@ -342,28 +343,79 @@ def _resplit_first_step(active: Conversation, first) -> None:
 
 # ── 한 줄 추가 흐름 (F4) ──────────────────────────────────────────
 def _run_single_add_turn(active: Conversation, user_text: str) -> None:
-    """한 줄 추가 의도: 한 문장에서 할 일 하나를 추출해 확정 대기로 올린다. (F4-1~F4-5)
+    """한 줄 추가 의도의 자유 입력 턴. (F4-1~F4-5)
 
-    - 후보가 있으면 stage 로 대기시키고(GP-1), 아래 확정 패널에서 검토·수정 후 담는다(F4-4).
-    - 할 일로 볼 수 없는 입력(감정·질문 등)이면 재입력 안내를 보여준다(F4-1).
-    - 최신 한 문장 기준이라, 직전에 남은 제안이 있으면 새 추출로 교체한다(F2 브레인덤프와 동일 방침).
+    - 되묻기(F4-3) 진행 중이면 입력을 현재 질문의 답으로 받아 다음으로 넘어간다.
+    - 그 외에는 새 한 문장으로 보고 속성을 추출한다. 제목이 모호하면 최소 항목만 되묻고(F4-3),
+      아니면 바로 확정 대기로 올린다(F4-4). 할 일이 아니면 재입력 안내(F4-1).
+    - 최신 한 문장 기준이라, 직전에 남은 제안·세션이 있으면 새 추출로 교체한다.
     """
-    confirm.clear_pending()  # 최신 한 문장 기준 — 직전 제안 정리
+    session = single_add.get_session()
+
+    # 되묻기 진행 중: 사용자가 패널 대신 직접 답을 적은 경우 → 현재 질문의 답으로 기록
+    if session is not None and single_add.is_clarifying(session):
+        single_add.answer(session, user_text)
+        if single_add.is_clarifying(session):
+            active.messages.append(Message("assistant", "좋아요, 하나만 더 확인할게요."))
+        else:
+            _finalize_single_add(active, session)  # 마지막 답 → 확정 대기로
+        return
+
+    # 새 한 문장 입력 → 직전 제안·세션 정리 후 추출
+    confirm.clear_pending()
+    single_add.clear_session()
     with st.spinner("한 문장에서 할 일을 정리하는 중…"):
         try:
-            proposal = coplanner.route(active.intent, user_text)  # → single_add.parse
+            session = single_add.start(user_text)
         except Exception as exc:  # LLMConfigError 포함
             _append_llm_error(active, exc, doing="할 일을 정리하지")
             return
 
-    if proposal.drafts:
-        confirm.stage(proposal)  # 확정 전 대기 — 아직 데이터 미반영 (GP-1, F4-4)
+    if session.questions:
+        # F4-3: 제목이 모호 → 최소 항목만 이지선다로 되묻는다(아래 되묻기 패널에서)
+        single_add.set_session(session)
+        active.messages.append(Message(
+            "assistant",
+            "이 할 일을 정확히 담기 위해 하나만 확인할게요 — 아래에서 골라주세요.",
+        ))
+    elif session.draft is not None:
+        confirm.stage(single_add.to_proposal(session))  # 확정 전 대기 (GP-1, F4-4)
         active.messages.append(Message(
             "assistant",
             "이렇게 이해했어요 — 아래에서 확인하고 필요하면 고친 뒤 담아주세요.",
         ))
     else:
         # F4-1: 할 일로 볼 수 없는 입력엔 빈 결과 + 재입력 안내
+        active.messages.append(Message(
+            "assistant",
+            session.note or "한 문장으로 조금만 더 또렷하게 적어줄래요?",
+        ))
+
+
+def _finalize_single_add(active: Conversation, session: single_add.SingleAddSession) -> None:
+    """되묻기 답을 반영해 확정 후보를 만들어 대기로 올린다. (F4-3, F4-4)
+
+    재추출 LLM 이 실패해도 세션에 갇히거나 사용자가 고른 답을 잃지 않게, 지금까지의 최선 추출로라도
+    확정 패널을 연다. 어떤 경우든 세션은 정리한다(유령 상태 방지). 확정 전엔 아무것도 반영 안 함(GP-1).
+    """
+    errored = False
+    with st.spinner("확인한 내용으로 정리하는 중…"):
+        try:
+            proposal = single_add.build_proposal(session)
+        except Exception as exc:  # LLMConfigError 포함
+            _append_llm_error(active, exc, doing="할 일을 정리하지")
+            proposal = single_add.to_proposal(session)  # 답 반영은 실패했어도 최선 추출로 진행
+            errored = True
+
+    single_add.clear_session()
+    if proposal.drafts:
+        confirm.stage(proposal)  # 확정 전 대기 (GP-1, F4-4)
+        if not errored:  # 오류 시엔 안내를 이미 남겼고, 확정 패널이 스스로 안내한다
+            active.messages.append(Message(
+                "assistant",
+                "이렇게 정리했어요 — 확인하고 필요하면 고친 뒤 담아주세요.",
+            ))
+    else:
         confirm.clear_pending()
         active.messages.append(Message(
             "assistant",
@@ -371,11 +423,45 @@ def _run_single_add_turn(active: Conversation, user_text: str) -> None:
         ))
 
 
+def _render_single_add_clarify_panel(active: Conversation) -> None:
+    """제목이 모호할 때 최소 항목만 이지선다로 되묻는 패널. (F4-3)
+
+    - 한 번에 하나씩 묻는다(Co-Planner 원칙). 사용자는 라디오로 고르거나 채팅으로 직접 답할 수 있다.
+    - '그냥 지금 정보로 담기'로 되묻기를 건너뛰고 바로 확정 패널로 갈 수 있다(과도한 질문 금지, 결정권은 사용자).
+    """
+    session = single_add.get_session()
+    if session is None or not single_add.is_clarifying(session):
+        return
+
+    q = single_add.current_question(session)
+    idx, total = session.cursor, len(session.questions)
+
+    st.divider()
+    st.markdown(f"**하나만 확인할게요 {idx + 1} / {total}**")
+    # index=None: 기본 선택 없이 사용자가 직접 고르게 한다. key 에 cursor 를 넣어 질문마다 초기화.
+    st.radio(q.question, q.options, index=None, key=f"sa_q_{idx}")
+
+    c1, c2 = st.columns([0.5, 0.5])
+    if c1.button("이 선택으로 계속", use_container_width=True, key=f"sa_qgo_{idx}"):
+        choice = st.session_state.get(f"sa_q_{idx}")
+        if not choice:
+            st.warning("하나만 골라주세요. (또는 '그냥 지금 정보로 담기')")
+        else:
+            single_add.answer(session, choice)
+            if not single_add.is_clarifying(session):
+                _finalize_single_add(active, session)
+            st.rerun()
+    if c2.button("그냥 지금 정보로 담기", use_container_width=True, key=f"sa_qskip_{idx}"):
+        single_add.skip_all(session)  # F4-3: 되묻기 건너뛰고 지금 정보로
+        _finalize_single_add(active, session)
+        st.rerun()
+
+
 def _render_single_add_panel(active: Conversation) -> None:
     """추출한 단일 할 일을 검토·수정해 담는 확정 패널. (F4-2~F4-5, GP-1)
 
     - 한 건만 다룬다(F4-5). 채워진 속성을 보여주되 전부 그 자리에서 수정 가능(F4-2·F4-3).
-    - 되묻기 대화 없이 이 패널 하나로 확인한다(과도한 질문 금지, F4-3).
+    - 제목이 모호했다면 앞서 되묻기 패널에서 확인을 마친 뒤 이 패널로 온다(F4-3).
     - '담기'를 눌러야 오늘 할 일에 반영된다(F4-4, GP-1).
     """
     proposal = confirm.get_pending()
@@ -474,8 +560,9 @@ else:
     left.caption(f"현재 모드 · {intent.label}")
     if right.button("＋ 새 대화"):
         st.session_state[ACTIVE_CONV] = None
-        confirm.clear_pending()   # 이전 대화의 확정 대기 제안을 정리한다
+        confirm.clear_pending()    # 이전 대화의 확정 대기 제안을 정리한다
         breakdown.clear_session()  # 진행 중이던 쪼개기 세션도 정리한다 (F3)
+        single_add.clear_session()  # 진행 중이던 한 줄 추가 되묻기 세션도 정리한다 (F4-3)
         st.rerun()
 
 # ── F1-2: 지금까지의 대화(직전 맥락) 표시 ─────────────────────────
@@ -488,7 +575,8 @@ if active is not None:
     _render_brain_dump_panel(active)          # F2-5
     _render_breakdown_clarify_panel(active)   # F3-2·F3-3 (구체화 질문)
     _render_breakdown_result_panel(active)    # F3-5·F3-6·F3-7 (분해 결과)
-    _render_single_add_panel(active)          # F4-2~F4-5 (한 줄 추가 확정)
+    _render_single_add_clarify_panel(active)  # F4-3 (제목 모호 시 최소 항목 되묻기)
+    _render_single_add_panel(active)          # F4-2·F4-4·F4-5 (한 줄 추가 확정)
 
 # ── F1-1 / F2-1: 자유 텍스트 입력으로 턴 진행 ─────────────────────
 user_text = st.chat_input(intent.hint)
