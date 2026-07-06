@@ -18,8 +18,8 @@ F2 인수 기준(브레인덤프):
 
 F3 인수 기준(쪼개기):
 - F3-1 큰 일(목표) 입력          → st.chat_input (F1-1 과 같은 통로)
-- F3-2 이지선다로 구체화          → breakdown.start 가 만든 질문을 구체화 패널에서 하나씩 제시
-- F3-3 구체화 불필요 시 건너뛰기   → 질문이 없거나 '바로 쪼개기' 선택 시 바로 분해
+- F3-2 5개 항목을 선택지로 구체화  → breakdown.start→advance 가 앞선 답에 맞춰 질문을 하나씩 생성·제시
+- F3-3 이미 분명한 항목은 건너뛰기 → 항목별로 건너뛰거나 '바로 쪼개기' 선택 시 바로 분해
 - F3-4 작은 단위(≤5)로 분해       → breakdown.decompose (call_llm)
 - F3-5 '지금 할 첫 단계' 제시      → 결과 패널에서 first_step_id 항목을 강조
 - F3-6 첫 단계 더 잘게 재쪼개기    → 결과 패널의 '더 잘게 쪼개기' → breakdown.resplit
@@ -179,6 +179,24 @@ def _decompose_and_stage(active: Conversation, session: breakdown.BreakdownSessi
         ))
 
 
+def _advance_clarify(active: Conversation, session: breakdown.BreakdownSession) -> None:
+    """구체화 다음 질문을 준비하고, 더 물을 게 없으면 분해로 넘어간다. (F3-2 → F3-3/F3-4)
+
+    질문 생성(advance)은 LLM 호출이라 여기서 스피너·오류 처리를 감싼다. 생성에 실패하면
+    지금까지 모은 맥락으로 바로 분해를 시도해 흐름이 끊기지 않게 한다(오류는 그 단계에서 안내).
+    """
+    try:
+        with st.spinner("이어서 여쭤볼 것을 살펴보는 중…"):
+            breakdown.advance(session)
+    except Exception:  # LLMConfigError 포함 — advance 가 pending 을 비워 둬 상태는 일관적
+        _decompose_and_stage(active, session)
+        return
+    if breakdown.is_clarifying(session):
+        active.messages.append(Message("assistant", "좋아요, 이어서 하나만 더 골라볼게요."))
+    else:
+        _decompose_and_stage(active, session)  # 구체화 충분 → 분해 (F3-3)
+
+
 def _run_breakdown_turn(active: Conversation, user_text: str) -> None:
     """쪼개기 의도의 자유 입력 턴. (F3-1~F3-3)
 
@@ -190,10 +208,7 @@ def _run_breakdown_turn(active: Conversation, user_text: str) -> None:
     # 구체화 진행 중: 사용자가 패널 대신 직접 답을 적은 경우 → 현재 질문의 답으로 기록
     if session is not None and breakdown.is_clarifying(session):
         breakdown.answer(session, user_text)
-        if breakdown.is_clarifying(session):
-            active.messages.append(Message("assistant", "좋아요, 이어서 하나만 더 골라볼게요."))
-        else:
-            _decompose_and_stage(active, session)  # 마지막 답 → 바로 분해
+        _advance_clarify(active, session)  # 다음 질문 준비 or 분해
         return
 
     # 새 목표 입력 → 구체화 필요 여부 판단 (이전 제안이 남았으면 정리)
@@ -217,33 +232,37 @@ def _run_breakdown_turn(active: Conversation, user_text: str) -> None:
 
 
 def _render_breakdown_clarify_panel(active: Conversation) -> None:
-    """구체화 질문을 한 번에 하나씩 이지선다로 보여준다. (F3-2, F3-3)"""
+    """구체화 질문을 한 번에 하나씩 선택지로 보여준다. (F3-2, F3-3)
+
+    질문은 앞선 답에 따라 동적으로 생성되므로 전체 개수를 미리 알 수 없다.
+    지금 다루는 항목(dimension)의 이름을 함께 보여줘 무엇을 좁히는지 알게 한다.
+    """
     session = breakdown.get_session()
     if session is None or not breakdown.is_clarifying(session):
         return
 
     q = breakdown.current_question(session)
-    idx, total = session.cursor, len(session.questions)
+    step_no = len(session.covered) + 1  # 지금 물어보는 것이 몇 번째인지(다룬 항목 수 + 1)
+    label = breakdown.CLARIFY_LABELS.get(q.dimension, "맥락")
 
     st.divider()
-    st.markdown(f"**구체화 질문 {idx + 1} / {total}**")
-    # index=None: 기본 선택 없이 사용자가 직접 고르게 한다. key 에 cursor 를 넣어 질문마다 초기화.
-    st.radio(q.question, q.options, index=None, key=f"bd_q_{idx}")
+    st.markdown(f"**구체화 질문 {step_no} · {label}**")
+    # index=None: 기본 선택 없이 사용자가 직접 고르게 한다. key 에 진행 수를 넣어 질문마다 초기화.
+    key = f"bd_q_{len(session.covered)}"
+    st.radio(q.question, q.options, index=None, key=key)
 
     c1, c2, c3 = st.columns([0.4, 0.3, 0.3])
     if c1.button("이 선택으로 계속", use_container_width=True):
-        choice = st.session_state.get(f"bd_q_{idx}")
+        choice = st.session_state.get(key)
         if not choice:
             st.warning("하나만 골라주세요. (또는 '이 질문 건너뛰기')")
         else:
             breakdown.answer(session, choice)
-            if not breakdown.is_clarifying(session):
-                _decompose_and_stage(active, session)
+            _advance_clarify(active, session)
             st.rerun()
     if c2.button("이 질문 건너뛰기", use_container_width=True):
         breakdown.skip_current(session)
-        if not breakdown.is_clarifying(session):
-            _decompose_and_stage(active, session)
+        _advance_clarify(active, session)
         st.rerun()
     if c3.button("바로 쪼개기", use_container_width=True):  # F3-3
         breakdown.skip_all(session)
