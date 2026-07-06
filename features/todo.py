@@ -11,7 +11,7 @@ from typing import Optional
 
 import streamlit as st
 
-from features import TODOS
+from features import FOCUS, FOCUS_STEP, TODOS
 
 
 # 우선순위 라벨 ↔ 값 (FEATURES.md 'TODO Card': 높음·중간·낮음·없음). F4 추출·목록 표시가 공유한다.
@@ -77,3 +77,56 @@ def toggle_done(todo_id: str) -> None:
         if todo.id == todo_id:
             todo.done = not todo.done
             break
+
+
+def reorder_todos(ordered_ids: list[str]) -> None:
+    """할 일 목록을 주어진 id 순서로 재배열한다. (F5-2 재정렬 반영, F5-8)
+
+    ordered_ids 에 없는 항목(제안 이후 새로 담긴 것 등)은 유실 없이 원래 순서대로 뒤에 붙인다.
+    중복 id·존재하지 않는 id 는 안전하게 무시한다(방어).
+    """
+    todos = st.session_state.get(TODOS, [])
+    by_id = {t.id: t for t in todos}
+    reordered: list[Todo] = []
+    placed: set = set()
+    for tid in ordered_ids:
+        todo = by_id.get(tid)
+        if todo is not None and tid not in placed:
+            reordered.append(todo)
+            placed.add(tid)
+    for todo in todos:  # 순서에 포함되지 않은 나머지는 원래 순서로 보존
+        if todo.id not in placed:
+            reordered.append(todo)
+    st.session_state[TODOS] = reordered
+
+
+# ── '지금 할 일' 포커스 (F5-3·F5-8) ───────────────────────────────
+def set_focus(todo_id: Optional[str]) -> None:
+    """'지금 할 일'로 표시할 할 일 id 를 지정한다. (F5 제안 수락 시)
+
+    새 포커스를 잡으면 이전 첫 단계 표시는 초기화한다(다른 일에 옛 첫 단계가 남지 않게).
+    """
+    st.session_state[FOCUS] = todo_id
+    st.session_state[FOCUS_STEP] = None
+
+
+def get_focus() -> Optional[str]:
+    """'지금 할 일'로 표시된 할 일 id 를 반환한다(없으면 None)."""
+    return st.session_state.get(FOCUS)
+
+
+def set_focus_step(step: Optional[str]) -> None:
+    """'지금 할 일'의 구체화한 첫 단계를 저장한다. (F5-5) — 할 일 memo 와 분리해 보관한다."""
+    step = (step or "").strip()
+    st.session_state[FOCUS_STEP] = step or None
+
+
+def get_focus_step() -> Optional[str]:
+    """'지금 할 일'의 첫 단계를 반환한다(없으면 None). memo 와 섞이지 않는다."""
+    return st.session_state.get(FOCUS_STEP)
+
+
+def clear_focus() -> None:
+    """'지금 할 일' 표시와 첫 단계를 모두 해제한다."""
+    st.session_state[FOCUS] = None
+    st.session_state[FOCUS_STEP] = None

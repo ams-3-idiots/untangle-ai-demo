@@ -1,4 +1,4 @@
-"""untangle-ai — Co-Planner 메인 화면 (F1) + 브레인덤프(F2) + 쪼개기(F3) 흐름.
+"""untangle-ai — Co-Planner 메인 화면 (F1) + 브레인덤프(F2) + 쪼개기(F3) + 한 줄 추가(F4) + 상황 제안(F5).
 
 Streamlit 진입점. `uv run streamlit run app.py` 로 실행한다.
 이 파일은 화면(UI)만 담당하고, 실제 로직은 features/* 를 호출한다.
@@ -31,6 +31,16 @@ F4 인수 기준(한 줄 추가):
 - F4-3 모호·부족 시 최소 확인      → 단서 없는 속성은 비운 채, 확정 패널에서만 검토·수정(되묻기 없음)
 - F4-4 확정 후 반영              → 확정 패널의 '담기' → single_add.commit_edited (GP-1)
 - F4-5 한 문장 = 한 할 일         → single_add 가 정확히 한 건만 만든다(다수 후보 아님)
+
+F5 인수 기준(상황 기반 제안):
+- F5-1 바뀐 상황·에너지 대화 전달  → st.chat_input (F1-1 과 같은 통로), 직전 맥락(history)도 함께 전달
+- F5-2 기존 당일 할 일 재해석·재정렬 → suggest.suggest_now 가 order_ids 로 재정렬(확정 시 reorder_todos)
+- F5-3 '지금 할 일' 하나 이유와 함께 → 제안 패널·대화 메시지에 pick 하나 + 이유(note) 노출
+- F5-4 단일·즉시 실행 단위        → pick 하나만, 필요하면 즉시 실행 첫 단계(first_step)까지
+- F5-5 막연하면 첫 단계로 구체화   → suggest.first_step + '더 잘게'(refine_first_step, 쪼개기 연계)
+- F5-6 에너지에 맞춰 부하 조정     → 대화에서 에너지를 추론(energy)해 난이도 조절
+- F5-7 수락·거절·대안 요청        → 패널 버튼(이걸로/다른 일/더 잘게/괜찮아요)
+- F5-8 확정 후 반영              → '이걸로 할게요' → suggest.confirm_suggestion (재정렬·표시, GP-1)
 """
 from __future__ import annotations
 
@@ -39,7 +49,16 @@ from datetime import date, time
 import streamlit as st
 
 import features
-from features import ACTIVE_CONV, LLMConfigError, breakdown, confirm, coplanner, single_add
+from features import (
+    ACTIVE_CONV,
+    LLMConfigError,
+    breakdown,
+    confirm,
+    coplanner,
+    single_add,
+    suggest,
+    todo,
+)
 from features.coplanner import Conversation, Intent, Message
 from features.todo import priority_label
 
@@ -451,6 +470,202 @@ def _render_single_add_panel(active: Conversation) -> None:
         st.rerun()
 
 
+# ── 상황 공유 흐름 (F5) ──────────────────────────────────────────
+def _last_user_text(active: Conversation) -> str:
+    """대화에서 사용자가 마지막으로 전한(오류 아님) 상황 문장을 찾는다. (대안 재요청용)"""
+    for msg in reversed(active.messages):
+        if msg.role == "user" and not msg.error:
+            return msg.content
+    return ""
+
+
+def _suggestion_message(proposal) -> str:
+    """제안한 '지금 할 일'과 이유를 대화에 남길 메시지로 만든다. (F5-3·F5-5·F5-6)
+
+    이유·에너지·첫 단계를 대화 본문에 함께 실어, '이유와 함께 제안'(F5-3)이 대화 기록에도 남게 한다.
+    """
+    pick = _find_focus_todo(proposal.first_step_id)
+    title = pick.title if pick is not None else "지금 할 일"
+    head = f"**지금은 이거 하나예요 — {title}**"
+    if proposal.energy:
+        head = f"에너지가 '{proposal.energy}'로 보여요. " + head  # F5-6 근거 노출
+    body = [head]
+    if proposal.note:
+        body.append(proposal.note)  # 이유 (F5-3)
+    if proposal.first_step:
+        body.append(f"첫 단계: {proposal.first_step}")  # 즉시 실행 단위 (F5-4·F5-5)
+    body.append("아래에서 수락하거나, 다른 일을 제안받을 수 있어요.")  # F5-7
+    return "\n\n".join(body)
+
+
+def _find_focus_todo(todo_id):
+    """오늘 할 일에서 id 로 한 건을 찾는다(없으면 None)."""
+    if not todo_id:
+        return None
+    for item in todo.list_todos():
+        if item.id == todo_id:
+            return item
+    return None
+
+
+def _stage_suggestion(active: Conversation, proposal) -> None:
+    """제안을 확정 대기로 올리고, 상황에 맞는 안내 메시지를 남긴다. (F5-3·F5-8)"""
+    if proposal.order_ids:  # 재정렬 + '지금 할 일' 제안
+        confirm.stage(proposal)  # 확정 전 대기 — 아직 데이터 미반영 (GP-1)
+        active.messages.append(Message("assistant", _suggestion_message(proposal)))
+    elif proposal.drafts:  # 목록이 비어 새 시작 하나를 제안
+        confirm.stage(proposal)
+        active.messages.append(Message(
+            "assistant",
+            (proposal.note or "이 작은 일부터 시작해볼까요?") + " — 아래에서 담을지 정해주세요.",
+        ))
+    else:  # 제안할 게 없음(빈 입력·모두 제외 등)
+        confirm.clear_pending()
+        active.messages.append(Message(
+            "assistant", proposal.note or "지금 상황을 조금만 더 들려줄래요?",
+        ))
+
+
+def _run_situation_turn(active: Conversation, user_text: str) -> None:
+    """상황 공유 의도: 상황·에너지를 반영해 재정렬하고 '지금 할 일' 하나를 제안한다. (F5-1~F5-6)
+
+    직전 맥락(history)을 함께 넘겨 여러 턴에 걸친 상황 공유·대안 요청을 자연스럽게 잇는다.
+    """
+    history = active.messages[:-1]  # 방금 넣은 상황 문장을 뺀 이전 맥락
+    with st.spinner("상황에 맞춰 지금 할 일을 고르는 중…"):
+        try:
+            proposal = suggest.suggest_now(user_text, history=history)
+        except Exception as exc:  # LLMConfigError 포함
+            _append_llm_error(active, exc, doing="지금 할 일을 고르지")
+            return
+    _stage_suggestion(active, proposal)
+
+
+def _resuggest_alternative(active: Conversation, proposal) -> None:
+    """현재 제안(과 이전 제외분)을 빼고 다른 '지금 할 일'을 다시 제안한다. (F5-7)"""
+    exclude = list(proposal.excluded_ids or [])
+    if proposal.first_step_id and proposal.first_step_id not in exclude:
+        exclude.append(proposal.first_step_id)
+    with st.spinner("다른 일을 찾아보는 중…"):
+        try:
+            new_proposal = suggest.suggest_now(
+                _last_user_text(active), exclude_ids=exclude, history=active.messages,
+            )
+        except Exception as exc:  # LLMConfigError 포함
+            _append_llm_error(active, exc, doing="다른 일을 고르지")
+            st.rerun()
+            return
+    _stage_suggestion(active, new_proposal)
+    st.rerun()
+
+
+def _refine_suggestion(active: Conversation, proposal) -> None:
+    """'지금 할 일'을 쪼개기(F3)로 첫 단계까지 더 잘게 구체화한다. (F5-5)"""
+    with st.spinner("첫 단계로 더 잘게 쪼개는 중…"):
+        try:
+            refined = suggest.refine_first_step(proposal)
+        except Exception as exc:  # LLMConfigError 포함
+            _append_llm_error(active, exc, doing="더 잘게 쪼개지")
+            st.rerun()
+            return
+    if refined is not None and refined.first_step and refined.first_step != proposal.first_step:
+        confirm.stage(refined)
+        active.messages.append(Message(
+            "assistant", f"첫 단계를 더 잘게 나눠봤어요 — {refined.first_step}",
+        ))
+    else:
+        active.messages.append(Message(
+            "assistant", "이 일은 지금 크기로도 충분히 시작할 만해 보여요.",
+        ))
+    st.rerun()
+
+
+def _render_suggest_starter_panel(active: Conversation, proposal) -> None:
+    """목록이 비었을 때 제안한 '작은 시작' 하나를 담기·거절로 처리한다. (F5-4·F5-8)"""
+    draft = proposal.drafts[0]
+    st.divider()
+    if proposal.note:
+        st.write(proposal.note)
+    st.markdown("**이 작은 일부터 시작해볼까요?**")
+    st.success(f"👉 {draft.title}")
+
+    col_add, col_skip = st.columns(2)
+    if col_add.button("✅ 오늘 할 일에 담기", use_container_width=True, key="sg_starter_add"):
+        confirm.confirm([draft.id])   # 새 할 일 반영 (F5-8, GP-1)
+        todo.set_focus(draft.id)      # 담자마자 '지금 할 일'로 표시 (F5-3)
+        active.messages.append(Message(
+            "assistant",
+            f"'{draft.title}'를 담고 '지금 할 일'로 표시했어요. 여기서부터 가볍게 시작해요.",
+        ))
+        st.rerun()
+    if col_skip.button("지금은 괜찮아요", use_container_width=True, key="sg_starter_skip"):
+        confirm.confirm([])           # 반영 없이 보관 (유실 없음)
+        active.messages.append(Message("assistant", "알겠어요, 지금은 그대로 둘게요."))
+        st.rerun()
+
+
+def _render_suggest_panel(active: Conversation) -> None:
+    """상황 기반 제안을 보여주고 수락·대안·더 잘게·거절을 처리한다. (F5-3~F5-8, GP-1)"""
+    proposal = confirm.get_pending()
+    if proposal is None or proposal.source != "suggest":
+        return
+
+    # 목록이 비어 새 시작 하나만 제안한 경우
+    if not proposal.order_ids:
+        if proposal.drafts:
+            _render_suggest_starter_panel(active, proposal)
+        return
+
+    todos = todo.list_todos()
+    by_id = {t.id: t for t in todos}
+    pick = by_id.get(proposal.first_step_id)
+
+    st.divider()
+    if proposal.energy:
+        st.caption(f"지금 에너지 · {proposal.energy}")  # F5-6
+    st.markdown("**지금 할 일** — 딱 하나만 골랐어요.")  # F5-3·F5-4
+    if pick is not None:
+        st.success(f"👉 {pick.title}")
+        if proposal.first_step:
+            st.caption(f"첫 단계: {proposal.first_step}")  # F5-4·F5-5
+    if proposal.note:
+        st.write(proposal.note)  # 이유 (F5-3)
+
+    # 재정렬 미리보기 (F5-2) — 확정 후에 실제 목록에 반영된다(F5-8).
+    with st.expander("이 순서로 다시 정렬해요 (미리보기)"):
+        for tid in proposal.order_ids:
+            item = by_id.get(tid)
+            if item is None:
+                continue
+            mark = "👉 " if item.id == proposal.first_step_id else "· "
+            st.write(mark + item.title)
+
+    # F5-7: 수락 / 대안 / 더 잘게 / 거절
+    col_ok, col_alt = st.columns(2)
+    if col_ok.button("✅ 이걸로 할게요", use_container_width=True, key="sg_accept"):
+        picked = suggest.confirm_suggestion(proposal)  # 재정렬·표시 반영 (F5-8)
+        name = picked.title if picked is not None else "지금 할 일"
+        active.messages.append(Message(
+            "assistant",
+            f"좋아요, '{name}'에 집중해요. '오늘 할 일'에서 맨 위로 올리고 '지금 할 일'로 표시해뒀어요.",
+        ))
+        st.rerun()
+    if col_alt.button("🔄 다른 일 제안", use_container_width=True, key="sg_alt"):
+        _resuggest_alternative(active, proposal)
+
+    col_finer, col_skip = st.columns(2)
+    if pick is not None and col_finer.button(
+        "🔬 더 잘게 — 첫 단계로 쪼개기", use_container_width=True, key="sg_finer"
+    ):
+        _refine_suggestion(active, proposal)  # F5-5 (쪼개기 연계)
+    if col_skip.button("지금은 괜찮아요", use_container_width=True, key="sg_skip"):
+        confirm.clear_pending()  # 반영 없이 제안만 정리 (원본 대화는 남는다)
+        active.messages.append(Message(
+            "assistant", "알겠어요, 지금은 그대로 둘게요. 상황이 또 바뀌면 언제든 알려줘요.",
+        ))
+        st.rerun()
+
+
 # ── 화면 렌더링 ──────────────────────────────────────────────────
 st.title("🧶 untangle-ai")
 st.caption("뒤섞인 생각을 '지금 할 첫 단계'로 — Co-Planner")
@@ -489,6 +704,7 @@ if active is not None:
     _render_breakdown_clarify_panel(active)   # F3-2·F3-3 (구체화 질문)
     _render_breakdown_result_panel(active)    # F3-5·F3-6·F3-7 (분해 결과)
     _render_single_add_panel(active)          # F4-2~F4-5 (한 줄 추가 확정)
+    _render_suggest_panel(active)             # F5-3~F5-8 (상황 기반 제안)
 
 # ── F1-1 / F2-1: 자유 텍스트 입력으로 턴 진행 ─────────────────────
 user_text = st.chat_input(intent.hint)
@@ -508,6 +724,8 @@ if user_text:
         _run_breakdown_turn(active, user_text)   # F3-1~F3-4
     elif active.intent is Intent.SINGLE_ADD:
         _run_single_add_turn(active, user_text)  # F4-1~F4-5
+    elif active.intent is Intent.SITUATION:
+        _run_situation_turn(active, user_text)   # F5-1~F5-6
     else:
         _run_chat_turn(active)  # F1-2
     st.rerun()

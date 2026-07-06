@@ -18,6 +18,8 @@ CONVERSATIONS = "conversations"  # 저장된 대화 원본           list[coplan
 PENDING = "pending"              # 확정 대기 중인 AI 제안      confirm.Proposal | None      (GP-1)
 ACTIVE_CONV = "active_conv"      # 진행 중인 대화             coplanner.Conversation | None (F1-2)
 BREAKDOWN = "breakdown"          # 진행 중인 쪼개기 세션       breakdown.BreakdownSession | None (F3)
+FOCUS = "focus"                  # '지금 할 일'로 표시된 todo id  str | None                   (F5-3·F5-8)
+FOCUS_STEP = "focus_step"        # '지금 할 일'의 구체화한 첫 단계  str | None                   (F5-5)
 
 # ── LLM 설정 (st.secrets, ENVIRONMENT.md §6) ──────────────────────
 # LLM_PROVIDER   : "openai" | "anthropic" (없으면 키 존재로 자동 판별)
@@ -39,6 +41,8 @@ def init_state() -> None:
     st.session_state.setdefault(PENDING, None)
     st.session_state.setdefault(ACTIVE_CONV, None)
     st.session_state.setdefault(BREAKDOWN, None)
+    st.session_state.setdefault(FOCUS, None)
+    st.session_state.setdefault(FOCUS_STEP, None)
 
 
 # ── LLM 단일 통로 ────────────────────────────────────────────────

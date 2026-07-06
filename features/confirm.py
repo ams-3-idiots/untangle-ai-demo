@@ -22,7 +22,12 @@ class Proposal:
     drafts: list[Todo] = field(default_factory=list)  # 사용자가 확정할 할 일 후보
     note: str = ""                                    # 제안 설명/이유 (F5-3 등)
     source: str = ""                                  # 출처 기능(brain_dump 등)
-    first_step_id: Optional[str] = None               # '지금 할 첫 단계' draft id (F3-5)
+    first_step_id: Optional[str] = None               # '지금 할 첫 단계' draft id (F3-5) / '지금 할 일' pick (F5-3)
+    # ── F5(상황 기반 제안) 전용 필드 — 다른 기능은 기본값 그대로 둔다 ──
+    order_ids: list = field(default_factory=list)     # 상황에 맞춰 재정렬한 할 일 id 순서 (F5-2)
+    energy: str = ""                                  # 감지한 에너지 상태(낮음/보통/높음) (F5-6)
+    first_step: str = ""                              # '지금 할 일'의 즉시 실행 첫 단계 (F5-4·F5-5)
+    excluded_ids: list = field(default_factory=list)  # 대안 요청으로 pick 후보에서 제외한 id (F5-7)
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
