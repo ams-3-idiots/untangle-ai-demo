@@ -266,7 +266,7 @@ def _run_breakdown_turn(active: Conversation, user_text: str) -> None:
         active.messages.append(
             Message(
                 "assistant",
-                "이 큰 일을 잘 쪼개기 위해 몇 가지만 골라볼게요. 아래에서 선택해주세요.",
+                "이 큰 일을 잘 쪼개기 위해 몇 가지만 여쭤볼게요. 아래 선택지에서 고르거나, 원하는 답을 채팅에 직접 적어도 돼요.",
             )
         )
     else:
@@ -294,6 +294,8 @@ def _render_breakdown_clarify_panel(active: Conversation) -> None:
     # index=None: 기본 선택 없이 사용자가 직접 고르게 한다. key 에 진행 수를 넣어 질문마다 초기화.
     key = f"bd_q_{len(session.covered)}"
     st.radio(q.question, q.options, index=None, key=key)
+    # 자유 입력 발견성(F3-2): 선택지를 먼저 주되, 채팅에 자연어로 답해도 반영됨을 알린다.
+    st.caption("마음에 드는 선택지가 없다면, 아래 채팅에 원하는 답을 직접 적어도 돼요.")
 
     c1, c2, c3 = st.columns([0.4, 0.3, 0.3])
     if c1.button("이 선택으로 계속", use_container_width=True):
