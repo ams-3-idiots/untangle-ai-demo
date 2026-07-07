@@ -5,8 +5,8 @@
 - F3-2 5개 항목의 맥락을 '선택지' 질문으로, 앞선 답에 맞춰 한 번에 하나씩 구체화해 나간다. (start→advance)
 - F3-3 이미 분명한 항목은 건너뛰고, 모두 분명하면 구체화 자체를 건너뛴다. (pending=None → 바로 decompose)
 - F3-4 구체화된 일을 작은 단위(≤5)로 분해한다. (decompose, MAX_STEPS)
-- F3-5 분해 결과 중 '지금 할 첫 단계' 하나를 선정해 제시한다. (Proposal.first_step_id)
-- F3-6 첫 단계가 여전히 크면 더 잘게 다시 쪼갤 수 있다. (resplit)
+- F3-5 다른 할 일과 구별되는 '지금 할 첫 단계'(즉시 실행 행동)를 함께 제시한다. (Proposal.first_step_id)
+- F3-6 결과 할 일 중 하나를 골라 더 잘게 다시 쪼갤 수 있다. (resplit, splice_step)
 - F3-7 분해 결과는 사용자 확정 후에만 반영된다. (confirm 모듈이 담당, GP-1)
 
 이 모듈은 로직만 담는다(레이어 규칙): Streamlit 위젯을 그리지 않고, 입력은 인자·출력은
@@ -238,16 +238,15 @@ _DECOMPOSE_SYSTEM = f"""당신은 큰 일을 '지금 바로 착수할 수 있는
 목표와, 있다면 사용자가 고른 맥락을 반영해 순서대로 실행할 작은 할 일로 나눕니다.
 
 분해 규칙:
-- {MAX_STEPS}개 이하로 나눕니다. 너무 잘게 쪼개 부담을 주지 않습니다.
-- 각 할 일은 구체적이고 바로 할 수 있는 행동으로, 짧은 한 줄. 되도록 동사로 끝맺습니다.
-- 실행 순서대로 나열합니다.
-- 그중 '지금 할 첫 단계' 하나를 고릅니다. 가장 작고, 지금 당장 시작할 수 있어야 합니다. (first_step_index)
+- '지금 할 첫 단계'(first_step) 1개와, 그다음 순서대로 실행할 작은 할 일(steps)을 만듭니다. 첫 단계를 포함해 모두 합쳐 {MAX_STEPS}개를 넘지 않습니다. 너무 잘게 쪼개 부담을 주지 않습니다.
+- steps 의 각 할 일은 구체적이고 바로 할 수 있는 행동으로, 짧은 한 줄. 되도록 동사로 끝맺고 실행 순서대로 나열합니다.
+- first_step 은 steps 와 '질적으로 다릅니다'. 고민·준비 없이 5초 안에 몸으로 시작할 수 있는 가장 작은 물리적 한 동작으로 씁니다. (예: "책상에 앉기", "노트북 펼치기", "인터넷에 '동네 치과' 검색해보기")
 - memo 에는 꼭 필요할 때만 아주 짧은 보충(왜/팁)을 적고, 없으면 빈 문자열로 둡니다.
-- 도저히 나눌 것이 없으면 빈 목록을 반환합니다.
+- 도저히 나눌 것이 없으면 steps 를 빈 목록으로, first_step 을 빈 값으로 둡니다.
 
 출력은 아래 JSON '그대로만' 내보냅니다. 코드펜스나 설명 문장을 덧붙이지 않습니다.
-{{"steps": [{{"title": "치과 목록 검색하기", "memo": ""}}], "first_step_index": 0}}
-나눌 것이 없으면 정확히 이렇게 답합니다: {{"steps": [], "first_step_index": 0}}"""
+{{"first_step": {{"title": "인터넷에 '동네 치과' 검색해보기", "memo": ""}}, "steps": [{{"title": "후기 좋은 곳 두어 곳 추리기", "memo": ""}}]}}
+나눌 것이 없으면 정확히 이렇게 답합니다: {{"first_step": {{"title": "", "memo": ""}}, "steps": []}}"""
 
 _FINER_HINT = (
     "\n\n참고: 아래 목표는 이미 한 번 쪼갠 결과의 한 단계입니다. "
@@ -265,7 +264,7 @@ def decompose(
 
     - answers: 구체화 질문에 대한 답(선택). 없어도 진행한다(F3-3).
     - finer=True: 재쪼개기(F3-6) — 한 단계를 더 잘게 나누도록 지시를 강화한다.
-    - 결과는 5개 이하로 제한하고(F3-4), 첫 단계는 Proposal.first_step_id 로 표시한다(F3-5).
+    - 결과는 첫 단계 포함 5개 이하로 제한하고(F3-4), 즉시 실행 행동인 첫 단계는 Proposal.first_step_id 로 표시한다(F3-5).
     - 반영 여부는 사용자에게 남긴다 — 여기선 확정 없이 후보만 만든다. (F3-7, GP-1)
     """
     goal = (goal or "").strip()
@@ -291,7 +290,7 @@ def decompose(
 
 
 def resplit(step_title: str, goal: Optional[str] = None) -> Proposal:
-    """'지금 할 첫 단계'가 여전히 크면 그 단계를 더 잘게 다시 쪼갠다. (F3-6)
+    """결과 할 일 중 사용자가 고른 한 단계가 여전히 크면 더 잘게 다시 쪼갠다. (F3-6)
 
     step_title 을 새 목표로 삼아 decompose(finer=True) 를 호출한다.
     goal 은 원래 큰 목표(맥락 유지용, 선택).
@@ -300,13 +299,13 @@ def resplit(step_title: str, goal: Optional[str] = None) -> Proposal:
     return decompose(step_title, answers, finer=True)
 
 
-def splice_first_step(
-    proposal: Proposal, target_id: str, finer_drafts: list
-) -> Proposal:
-    """분해 결과에서 target 단계를 더 잘게 나눈 하위 단계들로 교체한다(형제 단계는 유지). (F3-6)
+def splice_step(proposal: Proposal, target_id: str, finer_drafts: list) -> Proposal:
+    """분해 결과에서 사용자가 고른 target 할 일을 더 잘게 나눈 하위 단계들로 교체한다. (F3-6)
 
-    재쪼개기가 나머지 단계를 버리지 않게, 원래 목록의 순서를 지키며 target 자리에만
-    하위 단계들을 끼워 넣는다. 새 '지금 할 첫 단계'는 하위 단계의 첫 번째로 둔다.
+    재쪼개기가 나머지 할 일을 버리지 않게, 원래 목록의 순서를 지키며 target 자리에만
+    하위 단계들을 끼워 넣는다(형제는 유지). 곧 '새로 쪼개진 일들 + 고른 일을 뺀 나머지'다.
+    '지금 할 첫 단계'는 그 첫 단계 자체를 쪼갰을 때만 하위의 첫 번째로 옮기고,
+    다른 할 일을 쪼갰다면 기존 첫 단계를 그대로 유지한다. (F3-5)
     """
     new_drafts: list = []
     for draft in proposal.drafts:
@@ -314,7 +313,11 @@ def splice_first_step(
             new_drafts.extend(finer_drafts)
         else:
             new_drafts.append(draft)
-    first_id = finer_drafts[0].id if finer_drafts else proposal.first_step_id
+    # 첫 단계를 쪼갰다면 새 첫 단계는 하위의 첫 번째, 아니면 기존 첫 단계 유지.
+    if proposal.first_step_id == target_id and finer_drafts:
+        first_id = finer_drafts[0].id
+    else:
+        first_id = proposal.first_step_id
     return Proposal(
         drafts=new_drafts,
         note=proposal.note,
@@ -404,54 +407,49 @@ def _first_str(item: dict, keys) -> str:
 
 
 def _to_steps(data) -> tuple:
-    """파싱된 JSON 에서 유효한 단계만 Todo 로 만들고, 첫 단계 인덱스를 함께 돌려준다.
+    """파싱된 JSON 에서 '지금 할 첫 단계'와 나머지 작은 단위를 Todo 로 만든다.
 
-    반환: (drafts: list[Todo], first_index: int) — first_index 는 drafts 기준 위치.
+    반환: (drafts: list[Todo], first_index: int) — first_index 는 항상 0(맨 앞이 첫 단계).
+    - first_step(즉시 실행 행동)을 맨 앞에 두고, steps(작은 할 일)를 순서대로 잇는다. (F3-5)
     - 제목이 빈 항목은 버리고, 제목 기준 중복(대소문자 무시)을 제거한다.
-    - MAX_STEPS(5) 를 넘지 않는다. (F3-4)
-    - LLM 의 first_step_index 는 '원본 steps' 기준이므로, 걸러지고 재정렬된 drafts 위치로
-      다시 매핑한다. 고른 단계가 걸러졌거나(빈 제목·중복) 잘려나갔으면 첫 단계(0)로 대체한다. (F3-5)
+    - 첫 단계를 포함해 MAX_STEPS(5) 를 넘지 않는다. (F3-4)
+    - first_step 이 없거나 무효면(옛 형식·누락) 살아남은 첫 항목을 '지금 할 첫 단계'로 삼는다(방어).
     """
-    steps = []
+    first_step = None
+    steps: list = []
     if isinstance(data, dict):
+        first_step = data.get("first_step")
         raw_steps = data.get("steps")
         if isinstance(raw_steps, list):
             steps = raw_steps
     elif isinstance(data, list):
         steps = data
 
-    # 원본 steps 기준 first_step_index 를 읽어둔다(유효한 정수만). bool 은 int 하위형이라 제외.
-    raw_index = None
-    if isinstance(data, dict):
-        idx = data.get("first_step_index")
-        if isinstance(idx, int) and not isinstance(idx, bool):
-            raw_index = idx
-
     drafts: list = []
     seen = set()
-    first_index = 0  # 기본: 살아남은 첫 단계
-    for orig_pos, item in enumerate(steps):
+
+    def _push(item) -> None:
+        """유효한 항목 하나를 Todo 로 만들어 drafts 에 더한다(빈 제목·중복은 건너뜀)."""
         if isinstance(item, str):
             title, memo = item.strip(), ""
         elif isinstance(item, dict):
             title, memo = _first_str(item, _TITLE_KEYS), _first_str(item, _MEMO_KEYS)
         else:
-            continue
+            return
         if not title:
-            continue
+            return
         key = title.lower()
         if key in seen:
-            continue
+            return
         seen.add(key)
-        if (
-            orig_pos == raw_index
-        ):  # LLM 이 고른 첫 단계가 살아남았다면 그 위치로 매핑 (F3-5)
-            first_index = len(drafts)
         drafts.append(Todo(title=title, memo=memo, source="breakdown"))
-        if len(drafts) >= MAX_STEPS:  # 부담 없는 분량 (F3-4)
+
+    _push(first_step)  # 맨 앞: 즉시 실행 가능한 '지금 할 첫 단계' (F3-5)
+    for item in steps:
+        if len(drafts) >= MAX_STEPS:  # 첫 단계 포함 부담 없는 분량 (F3-4)
             break
+        _push(item)
 
     if not drafts:
         return [], 0
-    first_index = max(0, min(first_index, len(drafts) - 1))  # 범위 보정(방어)
-    return drafts, first_index
+    return drafts, 0

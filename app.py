@@ -21,8 +21,8 @@ F3 인수 기준(쪼개기):
 - F3-2 5개 항목을 선택지로 구체화  → breakdown.start→advance 가 앞선 답에 맞춰 질문을 하나씩 생성·제시
 - F3-3 이미 분명한 항목은 건너뛰기 → 항목별로 건너뛰거나 '바로 쪼개기' 선택 시 바로 분해
 - F3-4 작은 단위(≤5)로 분해       → breakdown.decompose (call_llm)
-- F3-5 '지금 할 첫 단계' 제시      → 결과 패널에서 first_step_id 항목을 강조
-- F3-6 첫 단계 더 잘게 재쪼개기    → 결과 패널의 '더 잘게 쪼개기' → breakdown.resplit
+- F3-5 '지금 할 첫 단계' 제시      → 즉시 실행 행동을 결과 패널에서 first_step_id 로 강조
+- F3-6 할 일 하나 골라 재쪼개기    → 각 할 일의 '🔬 더 잘게' → breakdown.resplit → splice_step
 - F3-7 확정 후 반영              → 결과 패널에서 고른 것만 confirm 으로 반영 (GP-1)
 
 F4 인수 기준(한 줄 추가):
@@ -325,22 +325,25 @@ def _render_breakdown_result_panel(active: Conversation) -> None:
     st.divider()
     if proposal.note:
         st.caption(proposal.note)
-    st.markdown("**쪼갠 할 일** — 오늘 할 일에 담을 것을 골라주세요.")
+    st.markdown(
+        "**쪼갠 할 일** — 담을 것을 고르고, 아직 큰 일은 '🔬 더 잘게'로 다시 쪼갤 수 있어요."
+    )
 
-    first = None
+    # 각 할 일: [담기 체크박스 | 더 잘게 버튼]. F3-6은 첫 단계뿐 아니라 어느 할 일이든 고를 수 있다.
+    # 재쪼개기는 클릭만 기억해 두고, 모든 위젯을 렌더한 뒤(아래) 마지막에 처리한다 —
+    # 루프 도중 st.rerun 을 부르면 뒤쪽 체크박스가 이 run 에 렌더되지 않아 선택 해제가 초기화된다.
+    resplit_target = None
     for draft in proposal.drafts:
         is_first = draft.id == proposal.first_step_id
         label = draft.title if not draft.memo else f"{draft.title} · {draft.memo}"
         if is_first:
-            first = draft
             label = f"👉 지금 할 첫 단계 — {label}"  # F3-5
-        st.checkbox(label, value=True, key=f"pick_{draft.id}")
-
-    # F3-6: '지금 할 첫 단계'가 여전히 크면 그 단계를 더 잘게 다시 쪼갠다.
-    if first is not None and st.button(
-        "🔬 '지금 할 첫 단계'가 아직 커요 — 더 잘게 쪼개기", use_container_width=True
-    ):
-        _resplit_first_step(active, first)
+        col_pick, col_split = st.columns([0.8, 0.2])
+        col_pick.checkbox(label, value=True, key=f"pick_{draft.id}")
+        if col_split.button(
+            "🔬 더 잘게", key=f"split_{draft.id}", use_container_width=True
+        ):  # F3-6: 고른 이 할 일을 더 잘게 다시 쪼갠다.
+            resplit_target = draft
 
     col_add, col_skip = st.columns(2)
     if col_add.button("✅ 선택한 할 일 담기", use_container_width=True):
@@ -370,37 +373,41 @@ def _render_breakdown_result_panel(active: Conversation) -> None:
         )
         st.rerun()
 
+    # 모든 체크박스·버튼을 렌더한 뒤에야 재쪼개기를 처리한다 — 선택 상태를 지키기 위함(위 주석). (F3-6)
+    if resplit_target is not None:
+        _resplit_step(active, resplit_target)
 
-def _resplit_first_step(active: Conversation, first) -> None:
-    """'지금 할 첫 단계'를 더 잘게 다시 쪼개 확정 대기 제안을 교체한다. (F3-6)"""
+
+def _resplit_step(active: Conversation, target) -> None:
+    """사용자가 고른 할 일 하나를 더 잘게 다시 쪼개 확정 대기 제안을 교체한다. (F3-6)"""
     current = confirm.get_pending()
     session = breakdown.get_session()
     goal = session.goal if session is not None else None
     with st.spinner("더 잘게 쪼개는 중…"):
         try:
-            finer = breakdown.resplit(first.title, goal=goal)
+            finer = breakdown.resplit(target.title, goal=goal)
         except Exception as exc:  # LLMConfigError 포함
             _append_llm_error(active, exc, doing="더 잘게 쪼개지")
             finer = None
 
     if finer is not None and finer.drafts:
-        # 첫 단계만 하위 단계로 교체하고 나머지 단계는 그대로 둔다(유실 없음). (F3-6)
+        # 고른 할 일만 하위 단계로 교체하고 나머지는 그대로 둔다(유실 없음). (F3-6)
         if current is not None and current.source == "breakdown":
-            merged = breakdown.splice_first_step(current, first.id, finer.drafts)
+            merged = breakdown.splice_step(current, target.id, finer.drafts)
         else:
             merged = finer
         confirm.stage(merged)
         active.messages.append(
             Message(
                 "assistant",
-                f"'{first.title}'를 더 잘게 쪼갰어요. 나머지 단계는 그대로 두었어요 — 다시 골라주세요.",
+                f"'{target.title}'를 더 잘게 쪼갰어요. 나머지 할 일은 그대로 두었어요 — 다시 골라주세요.",
             )
         )
     elif finer is not None:
         active.messages.append(
             Message(
                 "assistant",
-                "이 단계는 더 잘게 쪼개기 어려웠어요. 지금 크기로도 충분히 작아 보여요.",
+                "이 할 일은 더 잘게 쪼개기 어려웠어요. 지금 크기로도 충분히 작아 보여요.",
             )
         )
     st.rerun()
