@@ -329,15 +329,23 @@ def _render_breakdown_result_panel(active: Conversation) -> None:
         "**쪼갠 할 일** — 담을 것을 고르고, 아직 큰 일은 '🔬 더 잘게'로 다시 쪼갤 수 있어요."
     )
 
+    # '지금 할 첫 단계' 라벨에 원래 목표를 함께 보여주려고 세션의 목표를 가져온다. (F3-5)
+    session = breakdown.get_session()
+    goal = session.goal if session is not None else ""
+
     # 각 할 일: [담기 체크박스 | 더 잘게 버튼]. F3-6은 첫 단계뿐 아니라 어느 할 일이든 고를 수 있다.
     # 재쪼개기는 클릭만 기억해 두고, 모든 위젯을 렌더한 뒤(아래) 마지막에 처리한다 —
     # 루프 도중 st.rerun 을 부르면 뒤쪽 체크박스가 이 run 에 렌더되지 않아 선택 해제가 초기화된다.
     resplit_target = None
     for draft in proposal.drafts:
         is_first = draft.id == proposal.first_step_id
-        label = draft.title if not draft.memo else f"{draft.title} · {draft.memo}"
         if is_first:
-            label = f"👉 지금 할 첫 단계 — {label}"  # F3-5
+            # F3-5: '지금 할 첫 단계:'를 한 줄 위에 두고, 그 아래 줄에
+            #        '[첫 단계] → (최종 목표) [원래 목표]'를 보여준다.
+            st.markdown("**지금 할 첫 단계:**")
+            label = f"{draft.title} → (최종 목표) {goal}" if goal else draft.title
+        else:
+            label = draft.title if not draft.memo else f"{draft.title} · {draft.memo}"
         col_pick, col_split = st.columns([0.8, 0.2])
         col_pick.checkbox(label, value=True, key=f"pick_{draft.id}")
         if col_split.button(
