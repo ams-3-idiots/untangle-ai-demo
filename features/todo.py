@@ -20,6 +20,18 @@ PRIORITY_LABELS = {1: "높음", 2: "중간", 3: "낮음", 4: "없음"}
 PRIORITY_VALUES = {label: value for value, label in PRIORITY_LABELS.items()}
 NO_PRIORITY = 4  # '없음' — 우선순위를 지정하지 않은 기본값
 
+# 알림(마감 전 언제 알릴지) 선택지. edit 창 selectbox 와 F4 추출 정규화가 공유한다.
+# (FEATURES.md 'TODO Card': 알림 — 마감 전 언제 알림을 줄 것인지)
+REMINDER_NONE = "없음"
+REMINDER_CHOICES = [
+    REMINDER_NONE,
+    "10분 전",
+    "30분 전",
+    "1시간 전",
+    "3시간 전",
+    "1일 전",
+]
+
 
 def priority_label(value: int) -> str:
     """우선순위 값(int)을 한국어 라벨로 바꾼다. 알 수 없으면 '없음'."""
@@ -33,14 +45,15 @@ def priority_value(label: str) -> int:
 
 @dataclass
 class Todo:
-    """할 일 한 건. (F7-4: 우선순위·날짜·시간·알림·반복·하위·메모)"""
+    """할 일 한 건. (TODO Card: 우선순위·예상 소요 시간·마감 일시·알림·서브태스크·설명, F6-4: 반복)"""
 
     title: str
     memo: str = ""
     priority: int = NO_PRIORITY  # 1(높음)·2(중간)·3(낮음)·4(없음)
     due_date: Optional[date] = None
     due_time: Optional[time] = None
-    reminder: Optional[str] = None
+    estimate: Optional[str] = None  # 예상 소요 시간 (예: "30분", "1시간 30분")
+    reminder: Optional[str] = None  # 마감 전 알림 시점 (REMINDER_CHOICES 중 하나)
     recurrence: Optional[str] = None
     subtasks: list["Todo"] = field(default_factory=list)
     done: bool = False

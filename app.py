@@ -27,7 +27,7 @@ F3 인수 기준(쪼개기):
 
 F4 인수 기준(한 줄 추가):
 - F4-1 한 문장으로 단일 할 일 추가 → st.chat_input (F1-1 과 같은 통로)
-- F4-2 속성(날짜·시간·우선순위·반복) 추출 → coplanner.route → single_add.parse (call_llm)
+- F4-2 속성(날짜·시간·우선순위·소요시간·알림) 추출 → coplanner.route → single_add.parse (call_llm)
 - F4-3 모호·부족 시 최소 확인      → 단서 없는 속성은 비운 채, 확정 패널에서만 검토·수정(되묻기 없음)
 - F4-4 확정 후 반영              → 확정 패널의 '담기' → single_add.commit_edited (GP-1)
 - F4-5 한 문장 = 한 할 일         → single_add 가 정확히 한 건만 만든다(다수 후보 아님)
@@ -49,7 +49,7 @@ from features import (
     single_add,
 )
 from features.coplanner import Conversation, Intent, Message
-from features.todo import priority_label
+from features.todo import REMINDER_CHOICES, REMINDER_NONE, priority_label
 
 st.set_page_config(page_title="untangle-ai", page_icon="🧶", layout="centered")
 features.init_state()  # 메모리 저장소(session_state) 초기화
@@ -472,10 +472,23 @@ def _render_single_add_panel(active: Conversation) -> None:
     )
     due_time = picked_time if use_time else None
 
-    recurrence = st.text_input(
-        "🔁 반복 (예: 매주 월요일 — 없으면 비워두세요)",
-        value=draft.recurrence or "",
-        key=f"sa_recur_{draft.id}",
+    # 알림: 마감 전 언제 알릴지. (TODO Card '알림') 선택지는 REMINDER_CHOICES 로 고정한다.
+    cur_reminder = (
+        draft.reminder if draft.reminder in REMINDER_CHOICES else REMINDER_NONE
+    )
+    reminder_choice = st.selectbox(
+        "🔔 알림 (마감 전 언제 알릴지)",
+        REMINDER_CHOICES,
+        index=REMINDER_CHOICES.index(cur_reminder),
+        key=f"sa_remind_{draft.id}",
+    )
+    reminder = None if reminder_choice == REMINDER_NONE else reminder_choice
+
+    # 예상 소요 시간: 자유 입력. (TODO Card '예상되는 소요 시간')
+    estimate = st.text_input(
+        "⏱ 예상 소요 시간 (예: 30분 — 없으면 비워두세요)",
+        value=draft.estimate or "",
+        key=f"sa_estimate_{draft.id}",
     )
     memo = st.text_input("메모 (선택)", value=draft.memo, key=f"sa_memo_{draft.id}")
 
@@ -491,7 +504,8 @@ def _render_single_add_panel(active: Conversation) -> None:
                 priority_label=prio,
                 due_date=due_date,
                 due_time=due_time,
-                recurrence=recurrence,
+                estimate=estimate,
+                reminder=reminder,
                 memo=memo,
             )  # 확정 후 반영 (F4-4, GP-1)
             active.messages.append(
