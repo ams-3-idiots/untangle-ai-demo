@@ -11,6 +11,7 @@
 Proposal 로만 주고받는다. call_llm 설정/호출 오류(LLMConfigError 등)는 잡지 않고 그대로 올려
 화면(app.py)에서 안내 메시지로 바꾸게 한다. (F1 respond() 경로와 동일한 방침)
 """
+
 from __future__ import annotations
 
 import json
@@ -64,7 +65,7 @@ def extract(text: str) -> Proposal:
     raw = call_llm(
         prompt=text,
         system=_SYSTEM,
-        temperature=0.3,   # 추출은 안정성이 중요 — 낮은 온도
+        temperature=0.3,  # 추출은 안정성이 중요 — 낮은 온도
         max_tokens=800,
     )
     drafts = _to_drafts(_parse_json(raw))

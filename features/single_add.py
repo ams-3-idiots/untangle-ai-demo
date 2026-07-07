@@ -1,4 +1,5 @@
 """F4 — 단일 할 일 추가(AI). 자연어 한 문장에서 속성을 추출해 한 건을 만든다."""
+
 from __future__ import annotations
 
 from features.confirm import Proposal

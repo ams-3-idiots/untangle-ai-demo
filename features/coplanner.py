@@ -7,6 +7,7 @@
 할 일 추출·분해·제안·확정(F2~F5)의 구조화 처리는 각 모듈이 담당하며,
 route() 가 그 연결 지점이다(F1 대화에서 필요 시 호출).
 """
+
 from __future__ import annotations
 
 import uuid
@@ -58,7 +59,7 @@ class Message:
     실제 어시스턴트 발화가 아니므로 다음 턴의 LLM 맥락에서는 제외한다. (F1-2 충실도)
     """
 
-    role: str   # "user" | "assistant"
+    role: str  # "user" | "assistant"
     content: str
     error: bool = False
 

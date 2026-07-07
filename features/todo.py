@@ -2,6 +2,7 @@
 
 데이터는 st.session_state(메모리)에 보관하며, UI 렌더링은 하지 않는다.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -20,14 +21,14 @@ class Todo:
 
     title: str
     memo: str = ""
-    priority: int = 3                       # 1(높음) ~ 4(낮음)
+    priority: int = 3  # 1(높음) ~ 4(낮음)
     due_date: Optional[date] = None
     due_time: Optional[time] = None
     reminder: Optional[str] = None
     recurrence: Optional[str] = None
     subtasks: list["Todo"] = field(default_factory=list)
     done: bool = False
-    source: str = "manual"                  # 생성 출처(brain_dump/breakdown/…)
+    source: str = "manual"  # 생성 출처(brain_dump/breakdown/…)
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
