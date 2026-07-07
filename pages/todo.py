@@ -25,7 +25,9 @@ def _meta_chips(item) -> str:
     """할 일에 지정된 속성을 한 줄 배지 문자열로 만든다(지정된 것만)."""
     chips = []
     if item.priority in _PRIORITY_ICON:
-        chips.append(f"{_PRIORITY_ICON[item.priority]} {todo.priority_label(item.priority)}")
+        chips.append(
+            f"{_PRIORITY_ICON[item.priority]} {todo.priority_label(item.priority)}"
+        )
     if item.due_date is not None:
         when = item.due_date.strftime("%m-%d")
         if item.due_time is not None:
