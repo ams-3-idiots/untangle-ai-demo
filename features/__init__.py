@@ -5,6 +5,7 @@
 - 데이터는 별도 DB 없이 st.session_state(메모리)에 보관한다.
 - 모든 LLM 호출은 call_llm() 한 통로로만 한다(provider 교체·키 관리를 한 곳에서).
 """
+
 from __future__ import annotations
 
 from typing import List, Optional
@@ -12,12 +13,20 @@ from typing import List, Optional
 import streamlit as st
 
 # ── 메모리 저장소(session_state) 키 ────────────────────────────────
-TODOS = "todos"                  # 확정된 오늘 할 일          list[todo.Todo]              (F7)
-ARCHIVED = "archived"            # 확정에서 제외돼 보관된 항목  list[todo.Todo]              (F6-3)
-CONVERSATIONS = "conversations"  # 저장된 대화 원본           list[coplanner.Conversation] (F1-4)
-PENDING = "pending"              # 확정 대기 중인 AI 제안      confirm.Proposal | None      (GP-1)
-ACTIVE_CONV = "active_conv"      # 진행 중인 대화             coplanner.Conversation | None (F1-2)
-BREAKDOWN = "breakdown"          # 진행 중인 쪼개기 세션       breakdown.BreakdownSession | None (F3)
+TODOS = "todos"  # 확정된 오늘 할 일          list[todo.Todo]              (F7)
+ARCHIVED = (
+    "archived"  # 확정에서 제외돼 보관된 항목  list[todo.Todo]              (F6-3)
+)
+CONVERSATIONS = (
+    "conversations"  # 저장된 대화 원본           list[coplanner.Conversation] (F1-4)
+)
+PENDING = "pending"  # 확정 대기 중인 AI 제안      confirm.Proposal | None      (GP-1)
+ACTIVE_CONV = (
+    "active_conv"  # 진행 중인 대화             coplanner.Conversation | None (F1-2)
+)
+BREAKDOWN = (
+    "breakdown"  # 진행 중인 쪼개기 세션       breakdown.BreakdownSession | None (F3)
+)
 
 # ── LLM 설정 (st.secrets, ENVIRONMENT.md §6) ──────────────────────
 # LLM_PROVIDER   : "openai" | "anthropic" (없으면 키 존재로 자동 판별)
@@ -105,7 +114,9 @@ def _call_openai(system, messages, temperature, max_tokens) -> str:
 
     api_key = _secret("OPENAI_API_KEY")
     if not api_key:
-        raise LLMConfigError("OPENAI_API_KEY 가 없어요. .streamlit/secrets.toml 을 확인해주세요.")
+        raise LLMConfigError(
+            "OPENAI_API_KEY 가 없어요. .streamlit/secrets.toml 을 확인해주세요."
+        )
 
     model = _secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
     client = OpenAI(api_key=api_key)
@@ -129,7 +140,9 @@ def _call_anthropic(system, messages, temperature, max_tokens) -> str:
 
     api_key = _secret("ANTHROPIC_API_KEY")
     if not api_key:
-        raise LLMConfigError("ANTHROPIC_API_KEY 가 없어요. .streamlit/secrets.toml 을 확인해주세요.")
+        raise LLMConfigError(
+            "ANTHROPIC_API_KEY 가 없어요. .streamlit/secrets.toml 을 확인해주세요."
+        )
 
     model = _secret("ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL)
     client = Anthropic(api_key=api_key)
@@ -153,8 +166,6 @@ def _call_anthropic(system, messages, temperature, max_tokens) -> str:
             raise
     # content 는 블록 리스트 — 텍스트 블록만 모은다.
     parts = [
-        block.text
-        for block in resp.content
-        if getattr(block, "type", None) == "text"
+        block.text for block in resp.content if getattr(block, "type", None) == "text"
     ]
     return "".join(parts).strip()

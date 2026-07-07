@@ -1,4 +1,5 @@
 """F5 — 대화형 안내·제안. 바뀐 상황·에너지에 맞춰 재정렬하고 '지금 할 일'을 제안한다."""
+
 from __future__ import annotations
 
 from features.confirm import Proposal
@@ -15,7 +16,9 @@ def suggest_now(situation: str) -> Proposal:
     """
     # TODO(F5): features.call_llm 으로 재정렬 + 단일 제안(이유 포함)
     todos = list_todos()
-    pick = todos[0] if todos else Todo(title="가장 작은 일 하나 고르기", source="suggest")
+    pick = (
+        todos[0] if todos else Todo(title="가장 작은 일 하나 고르기", source="suggest")
+    )
     return Proposal(
         drafts=[pick],
         note=f"'{situation}' 상황이라면, 지금은 이 일이 가장 하기 좋아요.",
