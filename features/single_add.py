@@ -3,10 +3,11 @@
 담당 요구사항 (docs/FEATURES.md §4):
 - F4-1 사용자는 자연어 한 문장으로 단일 할 일을 추가한다. (입력 수집은 app.py, 여기선 텍스트를 받는다)
 - F4-2 입력에서 속성(제목·날짜·시간·우선순위·예상 소요 시간·알림)을 추출해 채운다. (LLM 단일 통로 call_llm)
-- F4-3 정보가 모호·부족하면 최소 항목만 확인한다(과도한 질문 금지). → 단서 없는 속성은 비워 두고,
-       확정 패널에서 사용자가 필요한 것만 손본다. 별도 되묻기 대화는 하지 않는다.
-- F4-4 추출 결과는 사용자 확정 후에만 반영된다. (commit_edited / confirm, GP-1)
+- F4-3 정보가 모호·부족해도 부족한대로 할 일에 추가한다. → 단서 없는 속성은 비운 채 두고,
+       모호한 값을 상상해 채우지 않는다(속성 편집·되묻기 없음).
 - F4-5 한 문장 입력 = 한 할 일. 다수 후보를 만들지 않는다(브레인덤프와 분리).
+
+확정 전에는 실제 데이터에 반영하지 않는다(GP-1). 확정·반영은 공통 모듈 confirm 이 맡는다.
 
 이 모듈은 로직만 담는다(레이어 규칙): Streamlit 위젯을 그리지 않고, 입력은 인자·출력은
 Proposal / Todo 로만 주고받는다. call_llm 설정/호출 오류(LLMConfigError 등)는 잡지 않고 그대로
@@ -21,12 +22,11 @@ from datetime import date, datetime, time
 from typing import Optional
 
 from features import call_llm
-from features.confirm import Proposal, clear_pending
+from features.confirm import Proposal
 from features.todo import (
     REMINDER_CHOICES,
     REMINDER_NONE,
     Todo,
-    add_todo,
     priority_value,
 )
 
@@ -62,7 +62,7 @@ def parse(sentence: str, *, today: Optional[date] = None) -> Proposal:
 
     - 상대 날짜('내일' 등) 환산 기준일을 today 로 주입할 수 있다(기본 date.today()).
     - 할 일로 볼 수 없는 입력(감정·질문·빈 문장)이면 빈 제안 + 재입력 안내를 돌려준다. (F4-1)
-    - 반영 여부는 사용자에게 남긴다 — 여기선 확정 없이 후보만 만든다. (F4-4, GP-1)
+    - 반영 여부는 사용자에게 남긴다 — 여기선 확정 없이 후보만 만든다. (GP-1)
     """
     sentence = (sentence or "").strip()
     if not sentence:
@@ -79,40 +79,6 @@ def parse(sentence: str, *, today: Optional[date] = None) -> Proposal:
     if todo is None:  # F4-1: 할 일이 아님 → 빈 결과 + 재입력 안내
         return Proposal(drafts=[], note=_REPROMPT, source="single_add")
     return Proposal(drafts=[todo], source="single_add")  # F4-5: 정확히 한 건
-
-
-def commit_edited(
-    *,
-    title: str,
-    priority_label: str = "없음",
-    due_date: Optional[date] = None,
-    due_time: Optional[time] = None,
-    estimate: str = "",
-    reminder: Optional[str] = None,
-    memo: str = "",
-) -> Optional[Todo]:
-    """확정 패널에서 사용자가 검토·수정한 단일 할 일을 오늘 할 일에 반영한다. (F4-4, GP-1)
-
-    확정 처리는 features 안에서 한다(ARCHITECTURE: 확정은 features 로직).
-    제목이 비면 아무것도 반영하지 않고 None 을 돌려준다(방어).
-    reminder 는 확정 패널이 REMINDER_CHOICES 로 골라 넘기므로 그대로 저장한다(빈 값이면 None).
-    """
-    title = (title or "").strip()
-    if not title:
-        return None
-    todo = Todo(
-        title=title,
-        memo=(memo or "").strip(),
-        priority=priority_value(priority_label),
-        due_date=due_date,
-        due_time=due_time,
-        estimate=(estimate or "").strip() or None,
-        reminder=(reminder or "").strip() or None,
-        source="single_add",
-    )
-    add_todo(todo)  # 실행 데이터에 반영 (F4-4, F6-2)
-    clear_pending()  # 확정했으니 대기 제안 정리
-    return todo
 
 
 # ── 프롬프트/파싱 유틸 ────────────────────────────────────────────
