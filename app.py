@@ -27,15 +27,13 @@ F3 인수 기준(쪼개기):
 
 F4 인수 기준(한 줄 추가):
 - F4-1 한 문장으로 단일 할 일 추가 → st.chat_input (F1-1 과 같은 통로)
-- F4-2 속성(날짜·시간·우선순위·반복) 추출 → coplanner.route → single_add.parse (call_llm)
-- F4-3 모호·부족 시 최소 확인      → 단서 없는 속성은 비운 채, 확정 패널에서만 검토·수정(되묻기 없음)
-- F4-4 확정 후 반영              → 확정 패널의 '담기' → single_add.commit_edited (GP-1)
+- F4-2 속성(날짜·시간·우선순위·소요시간·알림) 추출 → coplanner.route → single_add.parse (call_llm)
+- F4-3 모호·부족해도 부족한대로 추가 → 단서 없는 속성은 빈 채, 확정 패널은 읽기 전용 미리보기(속성 편집 없음)
 - F4-5 한 문장 = 한 할 일         → single_add 가 정확히 한 건만 만든다(다수 후보 아님)
+- GP-1 확정 전 미반영            → '담기'를 눌러야 confirm.confirm 으로 오늘 할 일에 반영
 """
 
 from __future__ import annotations
-
-from datetime import date, time
 
 import streamlit as st
 
@@ -46,10 +44,9 @@ from features import (
     breakdown,
     confirm,
     coplanner,
-    single_add,
 )
 from features.coplanner import Conversation, Intent, Message
-from features.todo import priority_label
+from features.todo import NO_PRIORITY, priority_label
 
 st.set_page_config(page_title="untangle-ai", page_icon="🧶", layout="centered")
 features.init_state()  # 메모리 저장소(session_state) 초기화
@@ -442,7 +439,7 @@ def _run_single_add_turn(active: Conversation, user_text: str) -> None:
         active.messages.append(
             Message(
                 "assistant",
-                "이렇게 이해했어요 — 아래에서 확인하고 필요하면 고친 뒤 담아주세요.",
+                "이렇게 이해했어요 — 아래에서 확인하고 담아주세요.",
             )
         )
     else:
@@ -456,12 +453,34 @@ def _run_single_add_turn(active: Conversation, user_text: str) -> None:
         )
 
 
-def _render_single_add_panel(active: Conversation) -> None:
-    """추출한 단일 할 일을 검토·수정해 담는 확정 패널. (F4-2~F4-5, GP-1)
+def _draft_chips(draft) -> str:
+    """추출된 속성을 한 줄 배지 문자열로 만든다(지정된 것만 — 부족한대로 노출). (F4-2, F4-3)
 
-    - 한 건만 다룬다(F4-5). 채워진 속성을 보여주되 전부 그 자리에서 수정 가능(F4-2·F4-3).
-    - 되묻기 대화 없이 이 패널 하나로 확인한다(과도한 질문 금지, F4-3).
-    - '담기'를 눌러야 오늘 할 일에 반영된다(F4-4, GP-1).
+    단서가 없어 비어 있는 속성은 아예 표시하지 않는다. '오늘 할 일' 목록 배지와 같은 형식.
+    """
+    chips = []
+    if draft.priority != NO_PRIORITY:
+        chips.append("⭐ " + priority_label(draft.priority))
+    if draft.due_date is not None:
+        when = draft.due_date.strftime("%m-%d")
+        if draft.due_time is not None:
+            when += " " + draft.due_time.strftime("%H:%M")
+        chips.append("📅 " + when)
+    elif draft.due_time is not None:
+        chips.append("⏰ " + draft.due_time.strftime("%H:%M"))
+    if draft.reminder:
+        chips.append("🔔 " + draft.reminder)
+    if draft.estimate:
+        chips.append("⏱ " + draft.estimate)
+    return " · ".join(chips)
+
+
+def _render_single_add_panel(active: Conversation) -> None:
+    """추출한 단일 할 일을 그대로 보여주고 담는 확정 패널. (F4-2·F4-3·F4-5, GP-1)
+
+    - 한 건만 다룬다(F4-5). 추출된 속성은 읽기 전용으로만 보여주고, 단서 없는 속성은
+      빈 채로 둔다 — 모호·부족해도 '부족한대로' 담는다(F4-3, 속성 편집·되묻기 없음).
+    - '담기'를 눌러야 오늘 할 일에 반영된다(확정 전 미반영 — GP-1).
     """
     proposal = confirm.get_pending()
     if proposal is None or proposal.source != "single_add" or not proposal.drafts:
@@ -469,78 +488,29 @@ def _render_single_add_panel(active: Conversation) -> None:
 
     draft = proposal.drafts[0]  # F4-5: 한 문장 = 한 할 일
     st.divider()
-    st.markdown("**이렇게 이해했어요** — 확인하고 필요한 것만 고쳐 담아주세요.")
+    st.markdown("**이렇게 이해했어요** — 부족한 부분은 그대로 두고 담아요.")
 
-    title = st.text_input("할 일", value=draft.title, key=f"sa_title_{draft.id}")
-
-    labels = ["높음", "중간", "낮음", "없음"]
-    cur = priority_label(draft.priority)
-    prio = st.radio(
-        "우선순위",
-        labels,
-        index=labels.index(cur) if cur in labels else 3,
-        horizontal=True,
-        key=f"sa_prio_{draft.id}",
-    )
-
-    # 날짜·시간은 '지정 안 함'을 표현할 수 있게 체크박스로 켜고 끈다(단서 없으면 꺼진 채로).
-    # 위젯은 끄더라도 항상 마운트하고 disabled 로만 비활성화한다 — 조건부 렌더로 미표시하면
-    # Streamlit 이 그 실행에서 위젯 key 를 session_state 에서 지워, 껐다 켤 때 사용자가 고친
-    # 값이 원래 추출값으로 되돌아가는 함정을 피한다.
-    c_date, c_time = st.columns(2)
-    use_date = c_date.checkbox(
-        "📅 날짜", value=draft.due_date is not None, key=f"sa_usedate_{draft.id}"
-    )
-    picked_date = c_date.date_input(
-        "날짜",
-        value=draft.due_date or date.today(),
-        key=f"sa_date_{draft.id}",
-        label_visibility="collapsed",
-        disabled=not use_date,
-    )
-    due_date = picked_date if use_date else None
-
-    use_time = c_time.checkbox(
-        "⏰ 시간", value=draft.due_time is not None, key=f"sa_usetime_{draft.id}"
-    )
-    picked_time = c_time.time_input(
-        "시간",
-        value=draft.due_time or time(9, 0),
-        key=f"sa_time_{draft.id}",
-        label_visibility="collapsed",
-        disabled=not use_time,
-    )
-    due_time = picked_time if use_time else None
-
-    recurrence = st.text_input(
-        "🔁 반복 (예: 매주 월요일 — 없으면 비워두세요)",
-        value=draft.recurrence or "",
-        key=f"sa_recur_{draft.id}",
-    )
-    memo = st.text_input("메모 (선택)", value=draft.memo, key=f"sa_memo_{draft.id}")
+    st.markdown(f"### {draft.title}")
+    chips = _draft_chips(draft)
+    if chips:
+        st.caption(
+            chips
+        )  # 추출된 속성만 배지로(단서 없으면 표시 안 함 — 부족한대로, F4-3)
+    if draft.memo:
+        st.caption("📝 " + draft.memo)
 
     col_add, col_skip = st.columns(2)
     if col_add.button(
         "✅ 오늘 할 일에 담기", use_container_width=True, key=f"sa_add_{draft.id}"
     ):
-        if not title.strip():
-            st.warning("할 일 제목을 적어주세요.")
-        else:
-            single_add.commit_edited(
-                title=title,
-                priority_label=prio,
-                due_date=due_date,
-                due_time=due_time,
-                recurrence=recurrence,
-                memo=memo,
-            )  # 확정 후 반영 (F4-4, GP-1)
-            active.messages.append(
-                Message(
-                    "assistant",
-                    f"'{title.strip()}'를 '오늘 할 일'에 담았어요. 사이드바의 '오늘 할 일'에서 확인할 수 있어요.",
-                )
+        confirm.confirm([draft.id])  # 확정 시에만 반영 (GP-1) — 추출 그대로 담는다
+        active.messages.append(
+            Message(
+                "assistant",
+                f"'{draft.title}'를 '오늘 할 일'에 담았어요. 사이드바의 '오늘 할 일'에서 확인할 수 있어요.",
             )
-            st.rerun()
+        )
+        st.rerun()
     if col_skip.button(
         "이번엔 안 할게요", use_container_width=True, key=f"sa_skip_{draft.id}"
     ):

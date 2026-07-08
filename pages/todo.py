@@ -1,7 +1,7 @@
 """오늘 할 일 목록 화면 (F7).
 
 features.todo 의 로직을 호출해 할 일을 보여주고 관리한다. (UI만 담당)
-할 일에 지정된 속성(우선순위·날짜·시간·반복)은 제목 아래 배지로 함께 보여준다.
+할 일에 지정된 속성(우선순위·날짜·시간·알림·예상 소요 시간)은 제목 아래 배지로 함께 보여준다.
 (F4 한 줄 추가가 채운 속성이 목록에서 드러나도록 — F6-1/F6-4)
 """
 
@@ -35,8 +35,10 @@ def _meta_chips(item) -> str:
         chips.append("📅 " + when)
     elif item.due_time is not None:
         chips.append("⏰ " + item.due_time.strftime("%H:%M"))
-    if item.recurrence:
-        chips.append("🔁 " + item.recurrence)
+    if item.reminder:
+        chips.append("🔔 " + item.reminder)
+    if item.estimate:
+        chips.append("⏱ " + item.estimate)
     return " · ".join(chips)
 
 
@@ -50,7 +52,7 @@ for item in todos:
     checked = col1.checkbox(item.title, value=item.done, key=f"todo_{item.id}")
     meta = _meta_chips(item)
     if meta:
-        col1.caption(meta)  # 우선순위·날짜·시간·반복 배지 (F4 추출 속성 노출)
+        col1.caption(meta)  # 우선순위·날짜·시간·알림·소요시간 배지 (F4 추출 속성 노출)
     if checked != item.done:
         todo.toggle_done(item.id)  # 즉시 되돌릴 수 있음(F7-3), 비징벌 표현(F7-5)
         st.rerun()
