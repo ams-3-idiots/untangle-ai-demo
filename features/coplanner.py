@@ -7,6 +7,7 @@
 할 일 추출·분해·제안·확정(F2~F5)의 구조화 처리는 각 모듈이 담당하며,
 route() 가 그 연결 지점이다(F1 대화에서 필요 시 호출).
 """
+
 from __future__ import annotations
 
 import uuid
@@ -58,7 +59,7 @@ class Message:
     실제 어시스턴트 발화가 아니므로 다음 턴의 LLM 맥락에서는 제외한다. (F1-2 충실도)
     """
 
-    role: str   # "user" | "assistant"
+    role: str  # "user" | "assistant"
     content: str
     error: bool = False
 
@@ -92,7 +93,7 @@ _INTENT_SYSTEM = {
     ),
     Intent.BREAKDOWN: (
         "지금은 '쪼개기' 모드입니다. 목표만 있는 큰 일을 함께 구체화합니다. "
-        "왜 하는지·언제까지인지 등 꼭 필요한 맥락을 한 번에 하나씩 이지선다로 가볍게 묻고, "
+        "왜 하는지·언제까지인지 등 꼭 필요한 맥락을 한 번에 하나씩 사용자에게 선택지를 주고 선택하도록 유도하고, "
         "준비가 되면 작은 실행 단위와 '지금 할 첫 단계' 하나를 이야기해 줍니다."
     ),
     Intent.SINGLE_ADD: (

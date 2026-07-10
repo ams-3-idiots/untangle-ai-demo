@@ -3,6 +3,7 @@
 모든 AI 결과물(Proposal)은 사용자가 확정하기 전까지 실제 데이터에 반영되지 않는다(GP-1).
 확정 시 선택된 항목만 할 일로 커밋하고, 나머지는 유실 없이 보관한다(F6-3).
 """
+
 from __future__ import annotations
 
 import uuid
@@ -53,7 +54,7 @@ def confirm(selected_ids: list[str]) -> None:
         return
     for draft in proposal.drafts:
         if draft.id in selected_ids:
-            add_todo(draft)                          # 실행 데이터에 반영 (F6-2)
+            add_todo(draft)  # 실행 데이터에 반영 (F6-2)
         else:
             st.session_state[ARCHIVED].append(draft)  # 유실 없이 보관 (F6-3)
     clear_pending()

@@ -18,18 +18,17 @@ F2 인수 기준(브레인덤프):
 
 F3 인수 기준(쪼개기):
 - F3-1 큰 일(목표) 입력          → st.chat_input (F1-1 과 같은 통로)
-- F3-2 이지선다로 구체화          → breakdown.start 가 만든 질문을 구체화 패널에서 하나씩 제시
-- F3-3 구체화 불필요 시 건너뛰기   → 질문이 없거나 '바로 쪼개기' 선택 시 바로 분해
+- F3-2 5개 항목을 선택지로 구체화  → breakdown.start→advance 가 앞선 답에 맞춰 질문을 하나씩 생성·제시
+- F3-3 이미 분명한 항목은 건너뛰기 → 항목별로 건너뛰거나 '바로 쪼개기' 선택 시 바로 분해
 - F3-4 작은 단위(≤5)로 분해       → breakdown.decompose (call_llm)
-- F3-5 '지금 할 첫 단계' 제시      → 결과 패널에서 first_step_id 항목을 강조
-- F3-6 첫 단계 더 잘게 재쪼개기    → 결과 패널의 '더 잘게 쪼개기' → breakdown.resplit
+- F3-5 '지금 할 첫 단계' 제시      → 즉시 실행 행동을 결과 패널에서 first_step_id 로 강조
+- F3-6 할 일 하나 골라 재쪼개기    → 각 할 일의 '🔬 더 잘게' → breakdown.resplit → splice_step
 - F3-7 확정 후 반영              → 결과 패널에서 고른 것만 confirm 으로 반영 (GP-1)
 
 F4 인수 기준(한 줄 추가):
 - F4-1 한 문장으로 단일 할 일 추가 → st.chat_input (F1-1 과 같은 통로)
-- F4-2 속성(날짜·시간·우선순위·반복) 추출 → coplanner.route → single_add.parse (call_llm)
-- F4-3 모호·부족 시 최소 확인      → 단서 없는 속성은 비운 채, 확정 패널에서만 검토·수정(되묻기 없음)
-- F4-4 확정 후 반영              → 확정 패널의 '담기' → single_add.commit_edited (GP-1)
+- F4-2 속성(날짜·시간·우선순위·소요시간·알림) 추출 → coplanner.route → single_add.parse (call_llm)
+- F4-3 모호·부족해도 부족한대로 추가 → 단서 없는 속성은 빈 채, 확정 패널은 읽기 전용 미리보기(속성 편집 없음)
 - F4-5 한 문장 = 한 할 일         → single_add 가 정확히 한 건만 만든다(다수 후보 아님)
 
 F5 인수 기준(상황 기반 제안):
@@ -42,9 +41,8 @@ F5 인수 기준(상황 기반 제안):
 - F5-7 수락·거절·대안 요청        → 패널 버튼(이걸로/다른 일/더 잘게/괜찮아요)
 - F5-8 확정 후 반영              → '이걸로 할게요' → suggest.confirm_suggestion (재정렬·표시, GP-1)
 """
-from __future__ import annotations
 
-from datetime import date, time
+from __future__ import annotations
 
 import streamlit as st
 
@@ -60,7 +58,7 @@ from features import (
     todo,
 )
 from features.coplanner import Conversation, Intent, Message
-from features.todo import priority_label
+from features.todo import NO_PRIORITY, priority_label
 
 st.set_page_config(page_title="untangle-ai", page_icon="🧶", layout="centered")
 features.init_state()  # 메모리 저장소(session_state) 초기화
@@ -81,10 +79,7 @@ def _run_chat_turn(active: Conversation) -> None:
                 reply = "⚠️ 빈 응답을 받았어요. 한 번만 더 말씀해 주시겠어요?"
         except LLMConfigError as exc:
             is_error = True
-            reply = (
-                f"⚠️ {exc}\n\n"
-                "설정 방법은 README의 'API 키 설정'을 참고해주세요."
-            )
+            reply = f"⚠️ {exc}\n\n설정 방법은 README의 'API 키 설정'을 참고해주세요."
         except Exception as exc:  # 호출 실패에도 대화가 끊기지 않게
             is_error = True
             reply = (
@@ -104,34 +99,42 @@ def _run_brain_dump_turn(active: Conversation, user_text: str) -> None:
         try:
             proposal = coplanner.route(active.intent, user_text)  # → brain_dump.extract
         except LLMConfigError as exc:
-            active.messages.append(Message(
-                "assistant",
-                f"⚠️ {exc}\n\n설정 방법은 README의 'API 키 설정'을 참고해주세요.",
-                error=True,
-            ))
+            active.messages.append(
+                Message(
+                    "assistant",
+                    f"⚠️ {exc}\n\n설정 방법은 README의 'API 키 설정'을 참고해주세요.",
+                    error=True,
+                )
+            )
             return
         except Exception as exc:  # 호출 실패에도 대화가 끊기지 않게
-            active.messages.append(Message(
-                "assistant",
-                "⚠️ 지금은 할 일을 뽑지 못했어요. 잠시 후 다시 시도해주세요. "
-                f"({type(exc).__name__})",
-                error=True,
-            ))
+            active.messages.append(
+                Message(
+                    "assistant",
+                    "⚠️ 지금은 할 일을 뽑지 못했어요. 잠시 후 다시 시도해주세요. "
+                    f"({type(exc).__name__})",
+                    error=True,
+                )
+            )
             return
 
     if proposal.drafts:
         confirm.stage(proposal)  # 확정 전 대기 — 아직 데이터 미반영 (GP-1)
-        active.messages.append(Message(
-            "assistant",
-            "이런 할 일들이 보여요 — 아래에서 오늘 할 일에 담을 걸 골라주세요.",
-        ))
+        active.messages.append(
+            Message(
+                "assistant",
+                "이런 할 일들이 보여요 — 아래에서 오늘 할 일에 담을 걸 골라주세요.",
+            )
+        )
     else:
         # F2-4: 추출이 어려운(추상적·비실행적) 입력엔 빈 결과 + 재입력 안내
         confirm.clear_pending()  # 직전에 남은 제안이 있으면 정리한다
-        active.messages.append(Message(
-            "assistant",
-            proposal.note or "조금만 더 구체적으로 적어줄래요?",
-        ))
+        active.messages.append(
+            Message(
+                "assistant",
+                proposal.note or "조금만 더 구체적으로 적어줄래요?",
+            )
+        )
 
 
 def _render_brain_dump_panel(active: Conversation) -> None:
@@ -153,21 +156,28 @@ def _render_brain_dump_panel(active: Conversation) -> None:
 
     col_add, col_skip = st.columns(2)
     if col_add.button("✅ 선택한 할 일 담기", use_container_width=True):
-        selected = [d.id for d in proposal.drafts if st.session_state.get(f"pick_{d.id}", True)]
+        selected = [
+            d.id for d in proposal.drafts if st.session_state.get(f"pick_{d.id}", True)
+        ]
         confirm.confirm(selected)  # 선택만 반영, 나머지는 보관 (F2-5, F6-3)
         count = len(selected)
-        active.messages.append(Message(
-            "assistant",
-            f"{count}개를 '오늘 할 일'에 담았어요. 사이드바의 '오늘 할 일'에서 확인할 수 있어요."
-            if count else "이번엔 아무것도 담지 않았어요. 언제든 다시 정리해도 좋아요.",
-        ))
+        active.messages.append(
+            Message(
+                "assistant",
+                f"{count}개를 '오늘 할 일'에 담았어요. 사이드바의 '오늘 할 일'에서 확인할 수 있어요."
+                if count
+                else "이번엔 아무것도 담지 않았어요. 언제든 다시 정리해도 좋아요.",
+            )
+        )
         st.rerun()
     if col_skip.button("이번엔 안 할게요", use_container_width=True):
         confirm.confirm([])  # 반영 없이 후보를 전부 보관한다(유실 없음, F6-3)
-        active.messages.append(Message(
-            "assistant",
-            "알겠어요, 지금은 그대로 둘게요. 필요할 때 다시 꺼내볼 수 있어요.",
-        ))
+        active.messages.append(
+            Message(
+                "assistant",
+                "알겠어요, 지금은 그대로 둘게요. 필요할 때 다시 꺼내볼 수 있어요.",
+            )
+        )
         st.rerun()
 
 
@@ -184,7 +194,9 @@ def _append_llm_error(active: Conversation, exc: Exception, *, doing: str) -> No
     active.messages.append(Message("assistant", text, error=True))
 
 
-def _decompose_and_stage(active: Conversation, session: breakdown.BreakdownSession) -> None:
+def _decompose_and_stage(
+    active: Conversation, session: breakdown.BreakdownSession
+) -> None:
     """구체화가 끝난 세션을 작은 단위로 분해해 확정 대기로 올린다. (F3-4, F3-5, F3-7)"""
     with st.spinner("작은 단위로 쪼개는 중…"):
         try:
@@ -195,17 +207,43 @@ def _decompose_and_stage(active: Conversation, session: breakdown.BreakdownSessi
 
     if proposal.drafts:
         confirm.stage(proposal)  # 확정 전 대기 — 아직 데이터 미반영 (GP-1, F3-7)
-        active.messages.append(Message(
-            "assistant",
-            "이렇게 나눠봤어요. '지금 할 첫 단계'부터 가볍게 시작해요 — 아래에서 담을 것을 골라주세요.",
-        ))
+        active.messages.append(
+            Message(
+                "assistant",
+                "이렇게 나눠봤어요. '지금 할 첫 단계'부터 가볍게 시작해요 — 아래에서 담을 것을 골라주세요.",
+            )
+        )
     else:
         # 분해가 어려운(너무 막연한) 입력엔 빈 결과 + 재입력 안내
         confirm.clear_pending()
-        active.messages.append(Message(
-            "assistant",
-            proposal.note or "이 일을 조금 더 구체적으로 적어줄래요?",
-        ))
+        active.messages.append(
+            Message(
+                "assistant",
+                proposal.note or "이 일을 조금 더 구체적으로 적어줄래요?",
+            )
+        )
+
+
+def _advance_clarify(active: Conversation, session: breakdown.BreakdownSession) -> None:
+    """구체화 다음 질문을 준비하고, 더 물을 게 없으면 분해로 넘어간다. (F3-2 → F3-3/F3-4)
+
+    질문 생성(advance)은 LLM 호출이라 여기서 스피너·오류 처리를 감싼다. 생성에 실패하면
+    지금까지 모은 맥락으로 바로 분해를 시도해 흐름이 끊기지 않게 한다(오류는 그 단계에서 안내).
+    """
+    try:
+        with st.spinner("이어서 여쭤볼 것을 살펴보는 중…"):
+            breakdown.advance(session)
+    except (
+        Exception
+    ):  # LLMConfigError 포함 — advance 가 pending 을 비워 둬 상태는 일관적
+        _decompose_and_stage(active, session)
+        return
+    if breakdown.is_clarifying(session):
+        active.messages.append(
+            Message("assistant", "좋아요, 이어서 하나만 더 골라볼게요.")
+        )
+    else:
+        _decompose_and_stage(active, session)  # 구체화 충분 → 분해 (F3-3)
 
 
 def _run_breakdown_turn(active: Conversation, user_text: str) -> None:
@@ -219,10 +257,7 @@ def _run_breakdown_turn(active: Conversation, user_text: str) -> None:
     # 구체화 진행 중: 사용자가 패널 대신 직접 답을 적은 경우 → 현재 질문의 답으로 기록
     if session is not None and breakdown.is_clarifying(session):
         breakdown.answer(session, user_text)
-        if breakdown.is_clarifying(session):
-            active.messages.append(Message("assistant", "좋아요, 이어서 하나만 더 골라볼게요."))
-        else:
-            _decompose_and_stage(active, session)  # 마지막 답 → 바로 분해
+        _advance_clarify(active, session)  # 다음 질문 준비 or 분해
         return
 
     # 새 목표 입력 → 구체화 필요 여부 판단 (이전 제안이 남았으면 정리)
@@ -237,42 +272,52 @@ def _run_breakdown_turn(active: Conversation, user_text: str) -> None:
 
     breakdown.set_session(session)
     if breakdown.is_clarifying(session):
-        active.messages.append(Message(
-            "assistant",
-            "이 큰 일을 잘 쪼개기 위해 몇 가지만 골라볼게요. 아래에서 선택해주세요.",
-        ))
+        active.messages.append(
+            Message(
+                "assistant",
+                "이 큰 일을 잘 쪼개기 위해 몇 가지만 여쭤볼게요. 아래 선택지에서 고르거나, 원하는 답을 채팅에 직접 적어도 돼요.",
+            )
+        )
     else:
         _decompose_and_stage(active, session)  # F3-3: 구체화 불필요 → 바로 분해
 
 
 def _render_breakdown_clarify_panel(active: Conversation) -> None:
-    """구체화 질문을 한 번에 하나씩 이지선다로 보여준다. (F3-2, F3-3)"""
+    """구체화 질문을 한 번에 하나씩 선택지로 보여준다. (F3-2, F3-3)
+
+    질문은 앞선 답에 따라 동적으로 생성되므로 전체 개수를 미리 알 수 없다.
+    지금 다루는 항목(dimension)의 이름을 함께 보여줘 무엇을 좁히는지 알게 한다.
+    """
     session = breakdown.get_session()
     if session is None or not breakdown.is_clarifying(session):
         return
 
     q = breakdown.current_question(session)
-    idx, total = session.cursor, len(session.questions)
+    step_no = (
+        len(session.covered) + 1
+    )  # 지금 물어보는 것이 몇 번째인지(다룬 항목 수 + 1)
+    label = breakdown.CLARIFY_LABELS.get(q.dimension, "맥락")
 
     st.divider()
-    st.markdown(f"**구체화 질문 {idx + 1} / {total}**")
-    # index=None: 기본 선택 없이 사용자가 직접 고르게 한다. key 에 cursor 를 넣어 질문마다 초기화.
-    st.radio(q.question, q.options, index=None, key=f"bd_q_{idx}")
+    st.markdown(f"**구체화 질문 {step_no} · {label}**")
+    # index=None: 기본 선택 없이 사용자가 직접 고르게 한다. key 에 진행 수를 넣어 질문마다 초기화.
+    key = f"bd_q_{len(session.covered)}"
+    st.radio(q.question, q.options, index=None, key=key)
+    # 자유 입력 발견성(F3-2): 선택지를 먼저 주되, 채팅에 자연어로 답해도 반영됨을 알린다.
+    st.caption("마음에 드는 선택지가 없다면, 아래 채팅에 원하는 답을 직접 적어도 돼요.")
 
     c1, c2, c3 = st.columns([0.4, 0.3, 0.3])
     if c1.button("이 선택으로 계속", use_container_width=True):
-        choice = st.session_state.get(f"bd_q_{idx}")
+        choice = st.session_state.get(key)
         if not choice:
             st.warning("하나만 골라주세요. (또는 '이 질문 건너뛰기')")
         else:
             breakdown.answer(session, choice)
-            if not breakdown.is_clarifying(session):
-                _decompose_and_stage(active, session)
+            _advance_clarify(active, session)
             st.rerun()
     if c2.button("이 질문 건너뛰기", use_container_width=True):
         breakdown.skip_current(session)
-        if not breakdown.is_clarifying(session):
-            _decompose_and_stage(active, session)
+        _advance_clarify(active, session)
         st.rerun()
     if c3.button("바로 쪼개기", use_container_width=True):  # F3-3
         breakdown.skip_all(session)
@@ -289,73 +334,99 @@ def _render_breakdown_result_panel(active: Conversation) -> None:
     st.divider()
     if proposal.note:
         st.caption(proposal.note)
-    st.markdown("**쪼갠 할 일** — 오늘 할 일에 담을 것을 골라주세요.")
+    st.markdown(
+        "**쪼갠 할 일** — 담을 것을 고르고, 아직 큰 일은 '🔬 더 잘게'로 다시 쪼갤 수 있어요."
+    )
 
-    first = None
+    # '지금 할 첫 단계' 라벨에 원래 목표를 함께 보여주려고 세션의 목표를 가져온다. (F3-5)
+    session = breakdown.get_session()
+    goal = session.goal if session is not None else ""
+
+    # 각 할 일: [담기 체크박스 | 더 잘게 버튼]. F3-6은 첫 단계뿐 아니라 어느 할 일이든 고를 수 있다.
+    # 재쪼개기는 클릭만 기억해 두고, 모든 위젯을 렌더한 뒤(아래) 마지막에 처리한다 —
+    # 루프 도중 st.rerun 을 부르면 뒤쪽 체크박스가 이 run 에 렌더되지 않아 선택 해제가 초기화된다.
+    resplit_target = None
     for draft in proposal.drafts:
         is_first = draft.id == proposal.first_step_id
-        label = draft.title if not draft.memo else f"{draft.title} · {draft.memo}"
         if is_first:
-            first = draft
-            label = f"👉 지금 할 첫 단계 — {label}"  # F3-5
-        st.checkbox(label, value=True, key=f"pick_{draft.id}")
-
-    # F3-6: '지금 할 첫 단계'가 여전히 크면 그 단계를 더 잘게 다시 쪼갠다.
-    if first is not None and st.button(
-        "🔬 '지금 할 첫 단계'가 아직 커요 — 더 잘게 쪼개기", use_container_width=True
-    ):
-        _resplit_first_step(active, first)
+            # F3-5: '지금 할 첫 단계:'를 한 줄 위에 두고, 그 아래 줄에
+            #        '[첫 단계] → (최종 목표) [원래 목표]'를 보여준다.
+            st.markdown("**지금 할 첫 단계:**")
+            label = f"{draft.title} → (최종 목표) {goal}" if goal else draft.title
+        else:
+            label = draft.title if not draft.memo else f"{draft.title} · {draft.memo}"
+        col_pick, col_split = st.columns([0.8, 0.2])
+        col_pick.checkbox(label, value=True, key=f"pick_{draft.id}")
+        if col_split.button(
+            "🔬 더 잘게", key=f"split_{draft.id}", use_container_width=True
+        ):  # F3-6: 고른 이 할 일을 더 잘게 다시 쪼갠다.
+            resplit_target = draft
 
     col_add, col_skip = st.columns(2)
     if col_add.button("✅ 선택한 할 일 담기", use_container_width=True):
-        selected = [d.id for d in proposal.drafts if st.session_state.get(f"pick_{d.id}", True)]
+        selected = [
+            d.id for d in proposal.drafts if st.session_state.get(f"pick_{d.id}", True)
+        ]
         confirm.confirm(selected)  # 선택만 반영, 나머지는 보관 (F3-7, F6-3)
         breakdown.clear_session()
         count = len(selected)
-        active.messages.append(Message(
-            "assistant",
-            f"{count}개를 '오늘 할 일'에 담았어요. 사이드바의 '오늘 할 일'에서 확인할 수 있어요."
-            if count else "이번엔 아무것도 담지 않았어요. 언제든 다시 쪼개봐도 좋아요.",
-        ))
+        active.messages.append(
+            Message(
+                "assistant",
+                f"{count}개를 '오늘 할 일'에 담았어요. 사이드바의 '오늘 할 일'에서 확인할 수 있어요."
+                if count
+                else "이번엔 아무것도 담지 않았어요. 언제든 다시 쪼개봐도 좋아요.",
+            )
+        )
         st.rerun()
     if col_skip.button("이번엔 안 할게요", use_container_width=True):
         confirm.confirm([])  # 반영 없이 후보를 전부 보관한다(유실 없음, F6-3)
         breakdown.clear_session()
-        active.messages.append(Message(
-            "assistant",
-            "알겠어요, 지금은 그대로 둘게요. 필요할 때 다시 꺼내볼 수 있어요.",
-        ))
+        active.messages.append(
+            Message(
+                "assistant",
+                "알겠어요, 지금은 그대로 둘게요. 필요할 때 다시 꺼내볼 수 있어요.",
+            )
+        )
         st.rerun()
 
+    # 모든 체크박스·버튼을 렌더한 뒤에야 재쪼개기를 처리한다 — 선택 상태를 지키기 위함(위 주석). (F3-6)
+    if resplit_target is not None:
+        _resplit_step(active, resplit_target)
 
-def _resplit_first_step(active: Conversation, first) -> None:
-    """'지금 할 첫 단계'를 더 잘게 다시 쪼개 확정 대기 제안을 교체한다. (F3-6)"""
+
+def _resplit_step(active: Conversation, target) -> None:
+    """사용자가 고른 할 일 하나를 더 잘게 다시 쪼개 확정 대기 제안을 교체한다. (F3-6)"""
     current = confirm.get_pending()
     session = breakdown.get_session()
     goal = session.goal if session is not None else None
     with st.spinner("더 잘게 쪼개는 중…"):
         try:
-            finer = breakdown.resplit(first.title, goal=goal)
+            finer = breakdown.resplit(target.title, goal=goal)
         except Exception as exc:  # LLMConfigError 포함
             _append_llm_error(active, exc, doing="더 잘게 쪼개지")
             finer = None
 
     if finer is not None and finer.drafts:
-        # 첫 단계만 하위 단계로 교체하고 나머지 단계는 그대로 둔다(유실 없음). (F3-6)
+        # 고른 할 일만 하위 단계로 교체하고 나머지는 그대로 둔다(유실 없음). (F3-6)
         if current is not None and current.source == "breakdown":
-            merged = breakdown.splice_first_step(current, first.id, finer.drafts)
+            merged = breakdown.splice_step(current, target.id, finer.drafts)
         else:
             merged = finer
         confirm.stage(merged)
-        active.messages.append(Message(
-            "assistant",
-            f"'{first.title}'를 더 잘게 쪼갰어요. 나머지 단계는 그대로 두었어요 — 다시 골라주세요.",
-        ))
+        active.messages.append(
+            Message(
+                "assistant",
+                f"'{target.title}'를 더 잘게 쪼갰어요. 나머지 할 일은 그대로 두었어요 — 다시 골라주세요.",
+            )
+        )
     elif finer is not None:
-        active.messages.append(Message(
-            "assistant",
-            "이 단계는 더 잘게 쪼개기 어려웠어요. 지금 크기로도 충분히 작아 보여요.",
-        ))
+        active.messages.append(
+            Message(
+                "assistant",
+                "이 할 일은 더 잘게 쪼개기 어려웠어요. 지금 크기로도 충분히 작아 보여요.",
+            )
+        )
     st.rerun()
 
 
@@ -377,25 +448,51 @@ def _run_single_add_turn(active: Conversation, user_text: str) -> None:
 
     if proposal.drafts:
         confirm.stage(proposal)  # 확정 전 대기 — 아직 데이터 미반영 (GP-1, F4-4)
-        active.messages.append(Message(
-            "assistant",
-            "이렇게 이해했어요 — 아래에서 확인하고 필요하면 고친 뒤 담아주세요.",
-        ))
+        active.messages.append(
+            Message(
+                "assistant",
+                "이렇게 이해했어요 — 아래에서 확인하고 담아주세요.",
+            )
+        )
     else:
         # F4-1: 할 일로 볼 수 없는 입력엔 빈 결과 + 재입력 안내
         confirm.clear_pending()
-        active.messages.append(Message(
-            "assistant",
-            proposal.note or "한 문장으로 조금만 더 또렷하게 적어줄래요?",
-        ))
+        active.messages.append(
+            Message(
+                "assistant",
+                proposal.note or "한 문장으로 조금만 더 또렷하게 적어줄래요?",
+            )
+        )
+
+
+def _draft_chips(draft) -> str:
+    """추출된 속성을 한 줄 배지 문자열로 만든다(지정된 것만 — 부족한대로 노출). (F4-2, F4-3)
+
+    단서가 없어 비어 있는 속성은 아예 표시하지 않는다. '오늘 할 일' 목록 배지와 같은 형식.
+    """
+    chips = []
+    if draft.priority != NO_PRIORITY:
+        chips.append("⭐ " + priority_label(draft.priority))
+    if draft.due_date is not None:
+        when = draft.due_date.strftime("%m-%d")
+        if draft.due_time is not None:
+            when += " " + draft.due_time.strftime("%H:%M")
+        chips.append("📅 " + when)
+    elif draft.due_time is not None:
+        chips.append("⏰ " + draft.due_time.strftime("%H:%M"))
+    if draft.reminder:
+        chips.append("🔔 " + draft.reminder)
+    if draft.estimate:
+        chips.append("⏱ " + draft.estimate)
+    return " · ".join(chips)
 
 
 def _render_single_add_panel(active: Conversation) -> None:
-    """추출한 단일 할 일을 검토·수정해 담는 확정 패널. (F4-2~F4-5, GP-1)
+    """추출한 단일 할 일을 그대로 보여주고 담는 확정 패널. (F4-2·F4-3·F4-5, GP-1)
 
-    - 한 건만 다룬다(F4-5). 채워진 속성을 보여주되 전부 그 자리에서 수정 가능(F4-2·F4-3).
-    - 되묻기 대화 없이 이 패널 하나로 확인한다(과도한 질문 금지, F4-3).
-    - '담기'를 눌러야 오늘 할 일에 반영된다(F4-4, GP-1).
+    - 한 건만 다룬다(F4-5). 추출된 속성은 읽기 전용으로만 보여주고, 단서 없는 속성은
+      빈 채로 둔다 — 모호·부족해도 '부족한대로' 담는다(F4-3, 속성 편집·되묻기 없음).
+    - '담기'를 눌러야 오늘 할 일에 반영된다(확정 전 미반영 — GP-1).
     """
     proposal = confirm.get_pending()
     if proposal is None or proposal.source != "single_add" or not proposal.drafts:
@@ -403,70 +500,40 @@ def _render_single_add_panel(active: Conversation) -> None:
 
     draft = proposal.drafts[0]  # F4-5: 한 문장 = 한 할 일
     st.divider()
-    st.markdown("**이렇게 이해했어요** — 확인하고 필요한 것만 고쳐 담아주세요.")
+    st.markdown("**이렇게 이해했어요** — 부족한 부분은 그대로 두고 담아요.")
 
-    title = st.text_input("할 일", value=draft.title, key=f"sa_title_{draft.id}")
-
-    labels = ["높음", "중간", "낮음", "없음"]
-    cur = priority_label(draft.priority)
-    prio = st.radio(
-        "우선순위",
-        labels,
-        index=labels.index(cur) if cur in labels else 3,
-        horizontal=True,
-        key=f"sa_prio_{draft.id}",
-    )
-
-    # 날짜·시간은 '지정 안 함'을 표현할 수 있게 체크박스로 켜고 끈다(단서 없으면 꺼진 채로).
-    # 위젯은 끄더라도 항상 마운트하고 disabled 로만 비활성화한다 — 조건부 렌더로 미표시하면
-    # Streamlit 이 그 실행에서 위젯 key 를 session_state 에서 지워, 껐다 켤 때 사용자가 고친
-    # 값이 원래 추출값으로 되돌아가는 함정을 피한다.
-    c_date, c_time = st.columns(2)
-    use_date = c_date.checkbox("📅 날짜", value=draft.due_date is not None, key=f"sa_usedate_{draft.id}")
-    picked_date = c_date.date_input(
-        "날짜", value=draft.due_date or date.today(),
-        key=f"sa_date_{draft.id}", label_visibility="collapsed", disabled=not use_date,
-    )
-    due_date = picked_date if use_date else None
-
-    use_time = c_time.checkbox("⏰ 시간", value=draft.due_time is not None, key=f"sa_usetime_{draft.id}")
-    picked_time = c_time.time_input(
-        "시간", value=draft.due_time or time(9, 0),
-        key=f"sa_time_{draft.id}", label_visibility="collapsed", disabled=not use_time,
-    )
-    due_time = picked_time if use_time else None
-
-    recurrence = st.text_input(
-        "🔁 반복 (예: 매주 월요일 — 없으면 비워두세요)",
-        value=draft.recurrence or "", key=f"sa_recur_{draft.id}",
-    )
-    memo = st.text_input("메모 (선택)", value=draft.memo, key=f"sa_memo_{draft.id}")
+    st.markdown(f"### {draft.title}")
+    chips = _draft_chips(draft)
+    if chips:
+        st.caption(
+            chips
+        )  # 추출된 속성만 배지로(단서 없으면 표시 안 함 — 부족한대로, F4-3)
+    if draft.memo:
+        st.caption("📝 " + draft.memo)
 
     col_add, col_skip = st.columns(2)
-    if col_add.button("✅ 오늘 할 일에 담기", use_container_width=True, key=f"sa_add_{draft.id}"):
-        if not title.strip():
-            st.warning("할 일 제목을 적어주세요.")
-        else:
-            single_add.commit_edited(
-                title=title,
-                priority_label=prio,
-                due_date=due_date,
-                due_time=due_time,
-                recurrence=recurrence,
-                memo=memo,
-            )  # 확정 후 반영 (F4-4, GP-1)
-            active.messages.append(Message(
+    if col_add.button(
+        "✅ 오늘 할 일에 담기", use_container_width=True, key=f"sa_add_{draft.id}"
+    ):
+        confirm.confirm([draft.id])  # 확정 시에만 반영 (GP-1) — 추출 그대로 담는다
+        active.messages.append(
+            Message(
                 "assistant",
-                f"'{title.strip()}'를 '오늘 할 일'에 담았어요. 사이드바의 '오늘 할 일'에서 확인할 수 있어요.",
-            ))
-            st.rerun()
-    if col_skip.button("이번엔 안 할게요", use_container_width=True, key=f"sa_skip_{draft.id}"):
+                f"'{draft.title}'를 '오늘 할 일'에 담았어요. 사이드바의 '오늘 할 일'에서 확인할 수 있어요.",
+            )
+        )
+        st.rerun()
+    if col_skip.button(
+        "이번엔 안 할게요", use_container_width=True, key=f"sa_skip_{draft.id}"
+    ):
         # 반영 없이 대기 제안만 정리한다. 원본 문장은 대화에 남아 유실되지 않는다(F1-4).
         confirm.clear_pending()
-        active.messages.append(Message(
-            "assistant",
-            "알겠어요, 지금은 담지 않을게요. 필요할 때 한 문장으로 다시 적어주면 돼요.",
-        ))
+        active.messages.append(
+            Message(
+                "assistant",
+                "알겠어요, 지금은 담지 않을게요. 필요할 때 한 문장으로 다시 적어주면 돼요.",
+            )
+        )
         st.rerun()
 
 
@@ -689,7 +756,7 @@ else:
     left.caption(f"현재 모드 · {intent.label}")
     if right.button("＋ 새 대화"):
         st.session_state[ACTIVE_CONV] = None
-        confirm.clear_pending()   # 이전 대화의 확정 대기 제안을 정리한다
+        confirm.clear_pending()  # 이전 대화의 확정 대기 제안을 정리한다
         breakdown.clear_session()  # 진행 중이던 쪼개기 세션도 정리한다 (F3)
         st.rerun()
 
@@ -721,7 +788,7 @@ if user_text:
     if active.intent is Intent.BRAIN_DUMP:
         _run_brain_dump_turn(active, user_text)  # F2-2~F2-4
     elif active.intent is Intent.BREAKDOWN:
-        _run_breakdown_turn(active, user_text)   # F3-1~F3-4
+        _run_breakdown_turn(active, user_text)  # F3-1~F3-4
     elif active.intent is Intent.SINGLE_ADD:
         _run_single_add_turn(active, user_text)  # F4-1~F4-5
     elif active.intent is Intent.SITUATION:
@@ -732,4 +799,6 @@ if user_text:
 
 # 안내: 자세한 할 일/대화 기록은 사이드바의 페이지에서
 st.divider()
-st.caption("← 사이드바에서 '오늘 할 일'과 '대화 기록'을 볼 수 있어요. 대화는 자동 저장돼요.")
+st.caption(
+    "← 사이드바에서 '오늘 할 일'과 '대화 기록'을 볼 수 있어요. 대화는 자동 저장돼요."
+)

@@ -5,6 +5,7 @@
 - 데이터는 별도 DB 없이 st.session_state(메모리)에 보관한다.
 - 모든 LLM 호출은 call_llm() 한 통로로만 한다(provider 교체·키 관리를 한 곳에서).
 """
+
 from __future__ import annotations
 
 from typing import List, Optional
@@ -109,7 +110,9 @@ def _call_openai(system, messages, temperature, max_tokens) -> str:
 
     api_key = _secret("OPENAI_API_KEY")
     if not api_key:
-        raise LLMConfigError("OPENAI_API_KEY 가 없어요. .streamlit/secrets.toml 을 확인해주세요.")
+        raise LLMConfigError(
+            "OPENAI_API_KEY 가 없어요. .streamlit/secrets.toml 을 확인해주세요."
+        )
 
     model = _secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
     client = OpenAI(api_key=api_key)
@@ -133,7 +136,9 @@ def _call_anthropic(system, messages, temperature, max_tokens) -> str:
 
     api_key = _secret("ANTHROPIC_API_KEY")
     if not api_key:
-        raise LLMConfigError("ANTHROPIC_API_KEY 가 없어요. .streamlit/secrets.toml 을 확인해주세요.")
+        raise LLMConfigError(
+            "ANTHROPIC_API_KEY 가 없어요. .streamlit/secrets.toml 을 확인해주세요."
+        )
 
     model = _secret("ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL)
     client = Anthropic(api_key=api_key)
@@ -157,8 +162,6 @@ def _call_anthropic(system, messages, temperature, max_tokens) -> str:
             raise
     # content 는 블록 리스트 — 텍스트 블록만 모은다.
     parts = [
-        block.text
-        for block in resp.content
-        if getattr(block, "type", None) == "text"
+        block.text for block in resp.content if getattr(block, "type", None) == "text"
     ]
     return "".join(parts).strip()
