@@ -46,10 +46,20 @@ todos = todo.list_todos()
 if not todos:
     st.caption("아직 할 일이 없어요. 메인 화면에서 생각을 정리해보세요.")
 
+# F5 상황 제안에서 수락한 '지금 할 일'을 강조한다(완료 전까지). (F5-3·F5-8)
+# 첫 단계는 memo(F2~F4 공용 필드)와 섞이지 않게 전용 상태에서 읽는다. (F5-5)
+focus_id = todo.get_focus()
+focus_step = todo.get_focus_step()
+
 # F7-1: 목록 표시 / F7-3: 완료 토글 / F7-2: 삭제
 for item in todos:
     col1, col2 = st.columns([0.88, 0.12])
     checked = col1.checkbox(item.title, value=item.done, key=f"todo_{item.id}")
+    if item.id == focus_id and not item.done:
+        badge = "👉 지금 할 일"
+        if focus_step:
+            badge += f" · 첫 단계: {focus_step}"  # F5-5 로 구체화한 첫 단계(있을 때만)
+        col1.caption(badge)
     meta = _meta_chips(item)
     if meta:
         col1.caption(meta)  # 우선순위·날짜·시간·알림·소요시간 배지 (F4 추출 속성 노출)
